@@ -1,4 +1,4 @@
-﻿name: Pipeline B1
+name: Pipeline B1
 
 on:
   schedule:
