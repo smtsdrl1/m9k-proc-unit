@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  # Long-running Telegram bot (interactive commands)
+  bot:
+    build: .
+    container_name: matrix-trader-bot
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+      - ./charts:/app/charts
+    command: python scripts/run_bot.py
+
+  # One-off crypto scanner (can be triggered via cron on host)
+  crypto-scanner:
+    build: .
+    container_name: matrix-crypto-scanner
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+      - ./charts:/app/charts
+    command: python scripts/scan_crypto.py
+    profiles:
+      - scan
+
+  # One-off BIST scanner
+  bist-scanner:
+    build: .
+    container_name: matrix-bist-scanner
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+      - ./charts:/app/charts
+    command: python scripts/scan_bist.py
+    profiles:
+      - scan
+
+  # One-off macro monitor
+  macro-monitor:
+    build: .
+    container_name: matrix-macro-monitor
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+    command: python scripts/macro_monitor.py
+    profiles:
+      - scan

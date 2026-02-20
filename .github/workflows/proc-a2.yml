@@ -1,0 +1,65 @@
+﻿name: Pipeline A2
+
+on:
+  schedule:
+    # Every 30 min during BIST hours (10:00-18:00 Istanbul = 07:00-15:00 UTC, Mon-Fri)
+    - cron: '0,30 7-15 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Create data directory
+        run: mkdir -p data charts
+
+      - name: Download DB artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: signal-db-latest
+          path: data/
+        continue-on-error: true
+
+      - name: Run BIST Scanner
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          CAPITAL: ${{ secrets.CAPITAL || '10000' }}
+          RISK_PERCENT: ${{ secrets.RISK_PERCENT || '2' }}
+          FORCE_SCAN: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
+        run: python scripts/scan_bist.py
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bist-scan-${{ github.run_number }}
+          path: |
+            data/
+            charts/
+          retention-days: 3
+
+      - name: Upload DB artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-db-latest
+          path: data/
+          retention-days: 90
+          overwrite: true

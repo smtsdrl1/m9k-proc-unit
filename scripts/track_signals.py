@@ -1,0 +1,101 @@
+"""
+Signal Tracker Script — Checks pending signals against live prices.
+Runs every 15 minutes via GitHub Actions.
+Records T1/T2/T3 hits, SL hits, and sends Telegram notifications.
+Also auto-retrains ML model when enough new data accumulates.
+Sends periodic accuracy reports when enough signals are resolved.
+"""
+import asyncio
+import sys
+import os
+import logging
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from src.signals.tracker import SignalTracker
+from src.telegram.sender import TelegramSender
+from src.telegram.formatter import format_accuracy_report
+from src.database.db import Database
+from src.ml.model import SignalPredictor
+from src.utils.helpers import setup_logging
+
+logger = logging.getLogger("matrix_trader.track_signals")
+
+
+async def main():
+    setup_logging()
+    logger.info("🔍 Signal Tracker starting...")
+
+    db = Database()
+    tracker = SignalTracker(db=db)
+    sender = TelegramSender()
+
+    try:
+        # 0. Expire old signals (>72h)
+        db.expire_old_signals(max_age_hours=72)
+
+        # 1. Track all pending signals against live prices
+        events = tracker.track_all_pending()
+
+        if events:
+            logger.info(f"📊 {len(events)} event(s) detected")
+
+            # Send notifications for each event
+            for event in events:
+                try:
+                    msg = tracker.format_event_message(event)
+                    await sender.send_message(msg)
+                    logger.info(f"📨 Notification sent: {event['type']} {event['symbol']}")
+                except Exception as e:
+                    logger.error(f"Failed to send notification: {e}")
+        else:
+            logger.info("No events — all signals still pending or no open signals")
+
+        # 2. Periodic accuracy report (when 5+ resolved signals exist)
+        try:
+            stats = db.get_accuracy_stats(30)
+            total_resolved = stats.get("total", 0)
+            if total_resolved >= 5:
+                report_msg = format_accuracy_report(stats)
+                await sender.send_message(report_msg)
+                logger.info(f"📊 Accuracy report sent: {total_resolved} signals, {stats.get('win_rate', 0)}% win rate")
+        except Exception as e:
+            logger.warning(f"Accuracy report error: {e}")
+
+        # 3. Auto-retrain ML model if enough new data
+        try:
+            predictor = SignalPredictor(db)
+            if predictor.should_retrain():
+                logger.info("🤖 ML model retraining triggered...")
+                metrics = predictor.train()
+                if metrics:
+                    accuracy = metrics.get("cv_accuracy") or metrics.get("train_accuracy", 0)
+                    msg = (
+                        f"🤖 <b>ML MODEL GÜNCELLENDİ</b>\n"
+                        f"━━━━━━━━━━━━━━━━━━\n"
+                        f"📈 Doğruluk: {accuracy:.1f}%\n"
+                        f"📊 Örnek: {metrics['total_samples']} "
+                        f"({metrics['win_samples']}W/{metrics['loss_samples']}L)\n"
+                        f"🏆 En Önemli: {', '.join(f[0] for f in metrics.get('top_features', [])[:3])}\n"
+                        f"━━━━━━━━━━━━━━━━━━"
+                    )
+                    await sender.send_message(msg)
+                    logger.info(f"ML model retrained — accuracy: {accuracy:.1f}%")
+        except Exception as e:
+            logger.warning(f"ML retrain check error: {e}")
+
+        # 4. Summary log
+        pending = db.get_pending_signals()
+        closed = db.get_closed_signals(100)
+        stats = db.get_accuracy_stats(30)
+        logger.info(
+            f"📊 Status: {len(pending)} pending, {len(closed)} closed, "
+            f"win_rate={stats.get('win_rate', 0)}%"
+        )
+
+    except Exception as e:
+        logger.error(f"Signal tracker error: {e}")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
