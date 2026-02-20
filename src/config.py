@@ -201,3 +201,8 @@ MAX_SIGNALS_PER_BIST_RUN   = 3   # BIST: max 3 sinyal / tarama
 # (MIN_CONFIDENCE + SL_HIT_CONFIDENCE_BOOST >= erişim eşiği)
 SL_HIT_CONFIDENCE_BOOST    = 10  # +10 puan gereksinimi
 SL_HIT_LOOKBACK_HOURS      = 24  # Bu süre içinde SL yendiği varsa boost uygulanır
+
+# ─── Paper Trading (Demo Simülasyon) ────────────────────────
+PAPER_TRADING_ENABLED         = True
+PAPER_TRADING_CAPITAL         = 10000.0   # Başlangıç demo bakiyesi ($)
+PAPER_TRADE_MAX_SLIPPAGE_PCT  = 1.0       # İzin verilen max kayma (%)

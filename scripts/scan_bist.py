@@ -8,6 +8,7 @@ import logging
 import sys
 import os
 import traceback
+from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -16,6 +17,7 @@ from src.config import (
     MIN_CONFIDENCE, SIGNAL_COOLDOWN_MINUTES,
     CIRCUIT_BREAKER_ENABLED,
     MAX_SIGNALS_PER_BIST_RUN, SL_HIT_CONFIDENCE_BOOST, SL_HIT_LOOKBACK_HOURS,
+    PAPER_TRADING_ENABLED,
 )
 from src.data.bist_feed import BistFeed
 from src.data.macro_feed import MacroFeed
@@ -347,7 +349,7 @@ async def main():
                 sent = await sender.send_message(message)
 
                 if sent:
-                    db.record_signal(
+                    signal_id = db.record_signal(
                         symbol=sig["symbol"],
                         direction=sig["direction"],
                         tier=sig["tier_name"],
@@ -361,6 +363,32 @@ async def main():
                     db.set_cooldown(sig["symbol"], sig["direction"])
                     signals_found += 1
                     logger.info(f"✅ [{symbol}] {sig['direction']} signal sent ({sig['confidence']}%)")
+
+                    # Open paper trade using live price right now
+                    if PAPER_TRADING_ENABLED and signal_id:
+                        try:
+                            from src.paper_trading.executor import PaperTradeExecutor
+                            executor = PaperTradeExecutor(db)
+                            targets = sig["risk_mgmt"].get("targets", {})
+                            trade = executor.open_trade(
+                                signal_id=signal_id,
+                                symbol=sig["symbol"],
+                                direction=sig["direction"],
+                                is_crypto=False,
+                                signal_tier=sig["tier_name"],
+                                signal_confidence=sig["confidence"],
+                                signal_sent_at=datetime.utcnow().isoformat(),
+                                signal_entry_price=sig["indicators"]["currentPrice"],
+                                stop_loss=sig["risk_mgmt"].get("stop_loss", 0),
+                                target1=targets.get("t1", 0),
+                                target2=targets.get("t2", 0),
+                                target3=targets.get("t3", 0),
+                            )
+                            if trade:
+                                paper_msg = executor.format_trade_open_message(trade)
+                                await sender.send_message(paper_msg)
+                        except Exception as e:
+                            logger.error(f"[{symbol}] Paper trade open error: {e}")
 
             if result.get("error") and result["error"] not in ("cooldown", "no_data"):
                 errors += 1

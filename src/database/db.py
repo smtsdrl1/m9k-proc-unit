@@ -8,7 +8,7 @@ import logging
 import sqlite3
 from datetime import datetime, timedelta
 from typing import Optional
-from src.config import DB_PATH
+from src.config import DB_PATH, PAPER_TRADING_CAPITAL
 
 logger = logging.getLogger("matrix_trader.database")
 
@@ -139,6 +139,63 @@ class Database:
                     by_tier TEXT,
                     by_confidence TEXT,
                     calculated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS paper_trades (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    signal_id INTEGER,
+                    symbol TEXT NOT NULL,
+                    direction TEXT NOT NULL,
+                    is_crypto INTEGER NOT NULL DEFAULT 1,
+                    signal_tier TEXT,
+                    signal_confidence INTEGER,
+                    signal_sent_at TEXT,
+                    signal_entry_price REAL NOT NULL,
+                    actual_entry_price REAL NOT NULL,
+                    entry_timestamp TEXT NOT NULL,
+                    entry_price_deviation_pct REAL DEFAULT 0,
+                    data_quality TEXT DEFAULT 'LIVE',
+                    capital_allocated REAL DEFAULT 0,
+                    position_size REAL DEFAULT 0,
+                    risk_amount REAL DEFAULT 0,
+                    stop_loss REAL DEFAULT 0,
+                    target1 REAL DEFAULT 0,
+                    target2 REAL DEFAULT 0,
+                    target3 REAL DEFAULT 0,
+                    status TEXT DEFAULT 'OPEN',
+                    exit_price REAL,
+                    exit_timestamp TEXT,
+                    pnl_amount REAL DEFAULT 0,
+                    pnl_pct REAL DEFAULT 0,
+                    t1_hit_at TEXT,
+                    t1_hit_price REAL,
+                    t1_pnl_amount REAL,
+                    t2_hit_at TEXT,
+                    t2_hit_price REAL,
+                    t2_pnl_amount REAL,
+                    t3_hit_at TEXT,
+                    t3_hit_price REAL,
+                    t3_pnl_amount REAL,
+                    duration_minutes INTEGER DEFAULT 0,
+                    max_favorable_pct REAL DEFAULT 0,
+                    max_adverse_pct REAL DEFAULT 0,
+                    last_checked_at TEXT,
+                    notes TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS paper_portfolio (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    balance REAL NOT NULL,
+                    open_positions_value REAL DEFAULT 0,
+                    total_equity REAL NOT NULL,
+                    daily_pnl REAL DEFAULT 0,
+                    total_pnl REAL DEFAULT 0,
+                    total_trades INTEGER DEFAULT 0,
+                    winning_trades INTEGER DEFAULT 0,
+                    losing_trades INTEGER DEFAULT 0,
+                    win_rate REAL DEFAULT 0,
+                    event TEXT DEFAULT 'SNAPSHOT'
                 );
             """)
             conn.commit()
@@ -708,7 +765,292 @@ class Database:
         finally:
             conn.close()
 
+    # ─── Paper Trading ───────────────────────────────────
+
+    def open_paper_trade(
+        self,
+        signal_id: int,
+        symbol: str,
+        direction: str,
+        is_crypto: bool,
+        signal_tier: str,
+        signal_confidence: int,
+        signal_sent_at: str,
+        signal_entry_price: float,
+        actual_entry_price: float,
+        entry_price_deviation_pct: float,
+        data_quality: str,
+        capital_allocated: float,
+        position_size: float,
+        risk_amount: float,
+        stop_loss: float,
+        target1: float,
+        target2: float,
+        target3: float,
+        notes: str = None,
+    ) -> int:
+        """Open a new paper trade. Returns the new trade ID."""
+        now = datetime.utcnow().isoformat()
+        conn = self._get_conn()
+        try:
+            cursor = conn.execute(
+                """INSERT INTO paper_trades
+                (signal_id, symbol, direction, is_crypto, signal_tier, signal_confidence,
+                 signal_sent_at, signal_entry_price, actual_entry_price, entry_timestamp,
+                 entry_price_deviation_pct, data_quality, capital_allocated, position_size,
+                 risk_amount, stop_loss, target1, target2, target3, last_checked_at, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    signal_id, symbol, direction, int(is_crypto), signal_tier, signal_confidence,
+                    signal_sent_at, signal_entry_price, actual_entry_price, now,
+                    round(entry_price_deviation_pct, 4), data_quality, capital_allocated,
+                    position_size, risk_amount, stop_loss, target1, target2, target3, now, notes,
+                )
+            )
+            conn.commit()
+            return cursor.lastrowid
+        finally:
+            conn.close()
+
+    def get_open_paper_trades(self) -> list[dict]:
+        """Get all currently OPEN paper trades."""
+        conn = self._get_conn()
+        try:
+            rows = conn.execute(
+                "SELECT * FROM paper_trades WHERE status = 'OPEN' ORDER BY entry_timestamp ASC"
+            ).fetchall()
+            return [self._paper_trade_to_dict(r) for r in rows]
+        finally:
+            conn.close()
+
+    def update_paper_trade_target(
+        self,
+        trade_id: int,
+        t_num: int,
+        hit_price: float,
+        pnl_amount: float,
+    ):
+        """Mark a paper trade target hit."""
+        now = datetime.utcnow().isoformat()
+        col_at = f"t{t_num}_hit_at"
+        col_price = f"t{t_num}_hit_price"
+        col_pnl = f"t{t_num}_pnl_amount"
+        conn = self._get_conn()
+        try:
+            conn.execute(
+                f"UPDATE paper_trades SET {col_at} = ?, {col_price} = ?, {col_pnl} = ?,"
+                f" status = ?, last_checked_at = ? WHERE id = ?",
+                (now, hit_price, round(pnl_amount, 4), f"T{t_num}_HIT", now, trade_id)
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def close_paper_trade(
+        self,
+        trade_id: int,
+        status: str,
+        exit_price: float,
+        pnl_amount: float,
+        pnl_pct: float,
+        duration_minutes: int,
+    ):
+        """Fully close a paper trade (SL, trailing stop, T3 hit, expired)."""
+        now = datetime.utcnow().isoformat()
+        conn = self._get_conn()
+        try:
+            conn.execute(
+                """UPDATE paper_trades
+                   SET status = ?, exit_price = ?, exit_timestamp = ?,
+                       pnl_amount = ?, pnl_pct = ?, duration_minutes = ?,
+                       last_checked_at = ?
+                   WHERE id = ?""",
+                (status, exit_price, now, round(pnl_amount, 4),
+                 round(pnl_pct, 4), duration_minutes, now, trade_id)
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def update_paper_trade_extremes(
+        self,
+        trade_id: int,
+        max_favorable_pct: float,
+        max_adverse_pct: float,
+    ):
+        """Update MFE/MAE for an open paper trade."""
+        conn = self._get_conn()
+        try:
+            conn.execute(
+                """UPDATE paper_trades
+                   SET max_favorable_pct = ?, max_adverse_pct = ?, last_checked_at = ?
+                   WHERE id = ?""",
+                (round(max_favorable_pct, 4), round(max_adverse_pct, 4),
+                 datetime.utcnow().isoformat(), trade_id)
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get_paper_trade_stats(self, days: int = 30) -> dict:
+        """Calculate comprehensive paper trading statistics."""
+        cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
+        conn = self._get_conn()
+        try:
+            all_rows = conn.execute(
+                "SELECT * FROM paper_trades WHERE entry_timestamp > ? ORDER BY entry_timestamp DESC",
+                (cutoff,)
+            ).fetchall()
+            trades = [self._paper_trade_to_dict(r) for r in all_rows]
+
+            if not trades:
+                return {
+                    "total_trades": 0,
+                    "open_trades": 0,
+                    "closed_trades": 0,
+                    "winning_trades": 0,
+                    "losing_trades": 0,
+                    "win_rate": 0.0,
+                    "total_pnl_amount": 0.0,
+                    "total_pnl_pct": 0.0,
+                    "avg_pnl_pct": 0.0,
+                    "t1_hit_count": 0,
+                    "t2_hit_count": 0,
+                    "t3_hit_count": 0,
+                    "sl_hit_count": 0,
+                    "avg_duration_min": 0,
+                    "best_trade_pnl": 0.0,
+                    "worst_trade_pnl": 0.0,
+                    "avg_deviation_pct": 0.0,
+                    "live_data_pct": 0.0,
+                    "current_balance": PAPER_TRADING_CAPITAL,
+                }
+
+            open_trades = [t for t in trades if t["status"] == "OPEN"]
+            closed_trades = [t for t in trades if t["status"] != "OPEN"]
+            winning = [t for t in closed_trades if t.get("pnl_amount", 0) > 0]
+            losing = [t for t in closed_trades if t.get("pnl_amount", 0) <= 0]
+            t1_hits = sum(1 for t in trades if t.get("t1_hit_at"))
+            t2_hits = sum(1 for t in trades if t.get("t2_hit_at"))
+            t3_hits = sum(1 for t in trades if t.get("t3_hit_at"))
+            sl_hits = sum(1 for t in closed_trades if t["status"] in ("SL_HIT", "TRAILING_STOP"))
+
+            pnl_values = [t.get("pnl_amount", 0) for t in closed_trades]
+            pnl_pct_values = [t.get("pnl_pct", 0) for t in closed_trades]
+            durations = [t.get("duration_minutes", 0) for t in closed_trades if t.get("duration_minutes")]
+            deviations = [abs(t.get("entry_price_deviation_pct", 0)) for t in trades]
+            live_count = sum(1 for t in trades if t.get("data_quality") == "LIVE")
+
+            total_pnl = sum(pnl_values)
+            # Estimate current balance: starting capital + all closed PnL
+            starting = PAPER_TRADING_CAPITAL
+            current_balance = starting + total_pnl
+
+            return {
+                "total_trades": len(trades),
+                "open_trades": len(open_trades),
+                "closed_trades": len(closed_trades),
+                "winning_trades": len(winning),
+                "losing_trades": len(losing),
+                "win_rate": round(len(winning) / len(closed_trades) * 100, 1) if closed_trades else 0.0,
+                "total_pnl_amount": round(total_pnl, 2),
+                "total_pnl_pct": round(total_pnl / starting * 100, 2) if starting else 0.0,
+                "avg_pnl_pct": round(sum(pnl_pct_values) / len(pnl_pct_values), 2) if pnl_pct_values else 0.0,
+                "t1_hit_count": t1_hits,
+                "t2_hit_count": t2_hits,
+                "t3_hit_count": t3_hits,
+                "sl_hit_count": sl_hits,
+                "avg_duration_min": round(sum(durations) / len(durations)) if durations else 0,
+                "best_trade_pnl": round(max(pnl_values), 2) if pnl_values else 0.0,
+                "worst_trade_pnl": round(min(pnl_values), 2) if pnl_values else 0.0,
+                "avg_deviation_pct": round(sum(deviations) / len(deviations), 3) if deviations else 0.0,
+                "live_data_pct": round(live_count / len(trades) * 100, 1) if trades else 0.0,
+                "current_balance": round(current_balance, 2),
+                "starting_capital": starting,
+            }
+        finally:
+            conn.close()
+
+    def snapshot_paper_portfolio(
+        self,
+        balance: float,
+        open_positions_value: float,
+        total_equity: float,
+        total_pnl: float,
+        total_trades: int,
+        winning_trades: int,
+        losing_trades: int,
+        event: str = "SNAPSHOT",
+    ):
+        """Save a portfolio snapshot."""
+        daily_pnl = self._get_today_paper_pnl()
+        win_rate = round(winning_trades / total_trades * 100, 1) if total_trades > 0 else 0.0
+        conn = self._get_conn()
+        try:
+            conn.execute(
+                """INSERT INTO paper_portfolio
+                (timestamp, balance, open_positions_value, total_equity, daily_pnl,
+                 total_pnl, total_trades, winning_trades, losing_trades, win_rate, event)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (datetime.utcnow().isoformat(), round(balance, 2),
+                 round(open_positions_value, 2), round(total_equity, 2),
+                 round(daily_pnl, 2), round(total_pnl, 2),
+                 total_trades, winning_trades, losing_trades, win_rate, event)
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _get_today_paper_pnl(self) -> float:
+        """Calculate today's closed paper trade PnL."""
+        today = datetime.utcnow().strftime("%Y-%m-%d")
+        conn = self._get_conn()
+        try:
+            rows = conn.execute(
+                "SELECT pnl_amount FROM paper_trades WHERE exit_timestamp LIKE ? AND status != 'OPEN'",
+                (f"{today}%",)
+            ).fetchall()
+            return sum(r[0] for r in rows if r[0] is not None)
+        finally:
+            conn.close()
+
+    def expire_old_paper_trades(self, max_age_hours: int = 72):
+        """Expire open paper trades older than max_age_hours."""
+        cutoff = (datetime.utcnow() - timedelta(hours=max_age_hours)).isoformat()
+        conn = self._get_conn()
+        try:
+            conn.execute(
+                """UPDATE paper_trades
+                   SET status = 'EXPIRED', exit_timestamp = ?, last_checked_at = ?
+                   WHERE status = 'OPEN' AND entry_timestamp < ?""",
+                (datetime.utcnow().isoformat(), datetime.utcnow().isoformat(), cutoff)
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
     # ─── Helpers ─────────────────────────────────────────
+
+    @staticmethod
+    def _paper_trade_to_dict(row) -> dict:
+        cols = [
+            "id", "signal_id", "symbol", "direction", "is_crypto",
+            "signal_tier", "signal_confidence", "signal_sent_at",
+            "signal_entry_price", "actual_entry_price", "entry_timestamp",
+            "entry_price_deviation_pct", "data_quality",
+            "capital_allocated", "position_size", "risk_amount",
+            "stop_loss", "target1", "target2", "target3",
+            "status", "exit_price", "exit_timestamp",
+            "pnl_amount", "pnl_pct",
+            "t1_hit_at", "t1_hit_price", "t1_pnl_amount",
+            "t2_hit_at", "t2_hit_price", "t2_pnl_amount",
+            "t3_hit_at", "t3_hit_price", "t3_pnl_amount",
+            "duration_minutes", "max_favorable_pct", "max_adverse_pct",
+            "last_checked_at", "notes",
+        ]
+        d = dict(zip(cols, row))
+        d["is_crypto"] = bool(d.get("is_crypto", 1))
+        return d
 
     @staticmethod
     def _alarm_to_dict(row) -> dict:

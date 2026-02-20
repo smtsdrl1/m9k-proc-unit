@@ -8,6 +8,7 @@ import logging
 import sys
 import os
 import traceback
+from datetime import datetime
 
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -17,6 +18,7 @@ from src.config import (
     MIN_CONFIDENCE, SIGNAL_COOLDOWN_MINUTES,
     CIRCUIT_BREAKER_ENABLED, FUNDING_RATE_ENABLED,
     MAX_SIGNALS_PER_CRYPTO_RUN, SL_HIT_CONFIDENCE_BOOST, SL_HIT_LOOKBACK_HOURS,
+    PAPER_TRADING_ENABLED,
 )
 from src.data.crypto_feed import CryptoFeed
 from src.data.macro_feed import MacroFeed
@@ -283,7 +285,7 @@ async def scan_symbol(
 
         if sent:
             # Record signal with ML feature snapshot
-            db.record_signal(
+            signal_id = db.record_signal(
                 symbol=symbol,
                 direction=signal["direction"],
                 tier=signal["tier_name"],
@@ -297,6 +299,32 @@ async def scan_symbol(
             db.set_cooldown(symbol, signal["direction"])
             result["signal"] = True
             logger.info(f"✅ [{symbol}] {signal['direction']} signal sent (confidence: {confidence}%)")
+
+            # Open paper trade using live price right now
+            if PAPER_TRADING_ENABLED and signal_id:
+                try:
+                    from src.paper_trading.executor import PaperTradeExecutor
+                    executor = PaperTradeExecutor(db)
+                    targets = risk_mgmt.get("targets", {})
+                    trade = executor.open_trade(
+                        signal_id=signal_id,
+                        symbol=symbol,
+                        direction=signal["direction"],
+                        is_crypto=True,
+                        signal_tier=signal["tier_name"],
+                        signal_confidence=confidence,
+                        signal_sent_at=datetime.utcnow().isoformat(),
+                        signal_entry_price=indicators["currentPrice"],
+                        stop_loss=risk_mgmt.get("stop_loss", 0),
+                        target1=targets.get("t1", 0),
+                        target2=targets.get("t2", 0),
+                        target3=targets.get("t3", 0),
+                    )
+                    if trade:
+                        paper_msg = executor.format_trade_open_message(trade)
+                        await sender.send_message(paper_msg)
+                except Exception as e:
+                    logger.error(f"[{symbol}] Paper trade open error: {e}")
 
     except Exception as e:
         result["error"] = str(e)
