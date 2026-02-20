@@ -48,6 +48,7 @@ async def scan_symbol(
     db: Database,
     macro_result: dict,
     circuit_breaker: CircuitBreaker = None,
+    fear_greed: int = 50,
 ) -> dict:
     """Scan a single crypto symbol through the full pipeline."""
     result = {"symbol": symbol, "signal": False, "error": None}
@@ -124,8 +125,11 @@ async def scan_symbol(
         pre_score = calculate_confidence(
             indicators, signal["direction"],
             mtf_result, None, sm_result, macro_result,
+            fear_greed=fear_greed,
             is_crypto=True,
             funding_rate=None,
+            df=primary_df,
+            symbol=symbol,
         )
         if pre_score["total"] < MIN_CONFIDENCE - 15:
             # Even with max sentiment boost, won't reach MIN_CONFIDENCE
@@ -149,12 +153,15 @@ async def scan_symbol(
             except Exception as e:
                 logger.warning(f"[{symbol}] Funding rate error: {e}")
 
-        # 10. Confidence scoring (with ML adjustment + funding rate)
+        # 10. Confidence scoring (with ML adjustment + funding rate + advanced df analysis)
         score_result = calculate_confidence(
             indicators, signal["direction"],
             mtf_result, sentiment_result, sm_result, macro_result,
+            fear_greed=fear_greed,
             is_crypto=True,
             funding_rate=funding_rate,
+            df=primary_df,
+            symbol=symbol,
         )
         confidence = score_result["total"]
         grade = score_result["grade"]
@@ -294,18 +301,21 @@ async def main():
     try:
         # Pre-fetch macro data
         macro_result = {}
+        fear_greed_val = 50  # default neutral
         try:
             macro_feed = MacroFeed()
             macro_data = macro_feed.fetch_all_current()
-            fear_greed = await macro_feed.fetch_fear_greed()
-            macro_result = analyze_macro(macro_data, fear_greed, is_bist=False)
+            fear_greed_data = await macro_feed.fetch_fear_greed()
+            if fear_greed_data:
+                fear_greed_val = fear_greed_data.get("value", 50)
+            macro_result = analyze_macro(macro_data, fear_greed_data, is_bist=False)
         except Exception as e:
             logger.warning(f"Macro fetch error: {e}")
 
         # Scan each symbol
         for i, symbol in enumerate(CRYPTO_SYMBOLS):
             try:
-                result = await scan_symbol(symbol, feed, groq, sender, db, macro_result, circuit_breaker)
+                result = await scan_symbol(symbol, feed, groq, sender, db, macro_result, circuit_breaker, fear_greed=fear_greed_val)
                 if result["signal"]:
                     signals_found += 1
                 if result["error"] and result["error"] not in ("cooldown", "no_data"):

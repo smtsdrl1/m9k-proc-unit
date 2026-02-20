@@ -128,6 +128,8 @@ async def scan_symbol(
             indicators, signal["direction"],
             mtf_result, None, sm_result, macro_result,
             is_crypto=False,
+            df=primary_df,
+            symbol=symbol,
         )
         if pre_score["total"] < MIN_CONFIDENCE - 15:
             return result
@@ -142,11 +144,13 @@ async def scan_symbol(
         except Exception as e:
             logger.warning(f"[{symbol}] Sentiment error: {e}")
 
-        # Confidence scoring (with ML adjustment)
+        # Confidence scoring (with ML adjustment + advanced df analysis)
         score_result = calculate_confidence(
             indicators, signal["direction"],
             mtf_result, sentiment_result, sm_result, macro_result,
             is_crypto=False,
+            df=primary_df,
+            symbol=symbol,
         )
         confidence = score_result["total"]
         grade = score_result["grade"]

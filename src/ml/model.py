@@ -75,12 +75,12 @@ class SignalPredictor:
         """
         # Technical indicators (from real OHLCV data)
         rsi = indicators.get("rsi", 50)
-        macd_hist = indicators.get("macd_histogram", 0)
+        macd_hist = indicators.get("macd_hist", 0)           # Fix: was "macd_histogram"
         adx = indicators.get("adx", 20)
-        bb_pctb = indicators.get("bb_percent_b", 0.5)
-        stoch_k = indicators.get("stochastic_k", 50)
+        bb_pctb = indicators.get("bb_pctb", 0.5)             # Fix: was "bb_percent_b"
+        stoch_k = indicators.get("stoch_k", 50)              # Fix: was "stochastic_k"
         atr = indicators.get("atr", 0)
-        price = indicators.get("close", indicators.get("price", 0))
+        price = indicators.get("currentPrice", 0)            # Fix: was "close"/"price"
         atr_pct = (atr / price * 100) if price > 0 else 0
 
         # Volume (from real OHLCV)
@@ -88,25 +88,45 @@ class SignalPredictor:
 
         # Multi-timeframe (calculated from real data across timeframes)
         mtf_result = mtf_result or {}
-        mtf_score = mtf_result.get("alignment_score", 50)
+        mtf_score = mtf_result.get("confluence_score", 50)   # Fix: was "alignment_score"
 
-        # Sentiment (from CoinGlass / alternative.me APIs)
+        # Sentiment (keyword-based score from news headlines)
         sentiment = sentiment or {}
-        sentiment_score = sentiment.get("score", 50)
-        fear_greed = sentiment.get("fear_greed", 50)
+        sentiment_score = sentiment.get("score", 0)
 
-        # Smart Money (from real market depth / funding rate data)
-        smart_money = smart_money or {}
-        smart_money_score = smart_money.get("score", 50)
-
-        # Macro (from real economic calendar / DXY data)
+        # Fear & Greed: extract from macro result alerts (set by analyze_macro)
         macro = macro or {}
-        macro_score = macro.get("score", 50)
+        fear_greed = 50  # default neutral
+        import re as _re
+        for _alert in macro.get("alerts", []):
+            _m = _re.search(r'(?:Fear|Greed)[^(]*\((\d+)\)', _alert)
+            if _m:
+                fear_greed = int(_m.group(1))
+                break
 
-        # Tier to numeric
-        tier_map = {"SNIPER_1": 6, "SNIPER_2": 5, "SNIPER_3": 4,
-                    "SNIPER_4": 3, "SNIPER_5": 2, "SNIPER_6": 1}
-        tier_numeric = tier_map.get(tier, 0)
+        # Smart Money (from volume anomaly / accumulation-distribution analysis)
+        smart_money = smart_money or {}
+        _sm_dir = smart_money.get("direction", "NEUTRAL")
+        _sm_score_map = {"BUY": 75, "SELL": 25, "NEUTRAL": 50}
+        smart_money_score = _sm_score_map.get(_sm_dir, 50)
+
+        # Macro (from DXY/VIX filters in analyze_macro)
+        _filter_key = "crypto_filter" if is_crypto else "bist_filter"
+        _filter_level = macro.get(_filter_key, "ALLOW")
+        _macro_score_map = {"ALLOW": 65, "CAUTION": 40, "BLOCK": 15}
+        macro_score = _macro_score_map.get(_filter_level, 50)
+
+        # Tier to numeric — matches actual tier_name strings from detector.py
+        # Fix: was mapping "SNIPER_1" etc. which never matches actual tier names
+        _tier_map = {
+            "EXTREME": 6, "STRONG": 5, "MODERATE": 4,
+            "SPECULATIVE": 3, "DIVERGENCE": 2, "CONTRARIAN": 1, "WEAK": 1,
+        }
+        tier_numeric = 0
+        for _key, _val in _tier_map.items():
+            if _key in tier.upper():
+                tier_numeric = _val
+                break
 
         return {
             "rsi": round(rsi, 2),

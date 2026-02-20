@@ -51,14 +51,23 @@ async def main():
         else:
             logger.info("No events — all signals still pending or no open signals")
 
-        # 2. Periodic accuracy report (when 5+ resolved signals exist)
+        # 2. Daily accuracy report — throttled to once per day (15:30-15:45 UTC window)
+        # Without throttling this would spam every 15 minutes when resolved signals exist
         try:
-            stats = db.get_accuracy_stats(30)
-            total_resolved = stats.get("total", 0)
-            if total_resolved >= 5:
-                report_msg = format_accuracy_report(stats)
-                await sender.send_message(report_msg)
-                logger.info(f"📊 Accuracy report sent: {total_resolved} signals, {stats.get('win_rate', 0)}% win rate")
+            from datetime import datetime as _dt
+            _now = _dt.utcnow()
+            _in_report_window = (
+                _now.weekday() < 5           # Mon-Fri only
+                and _now.hour == 15          # 15:xx UTC = ~18:xx Istanbul
+                and 30 <= _now.minute < 45   # 15-minute window
+            )
+            if _in_report_window:
+                stats = db.get_accuracy_stats(30)
+                total_resolved = stats.get("total", 0)
+                if total_resolved >= 5:
+                    report_msg = format_accuracy_report(stats)
+                    await sender.send_message(report_msg)
+                    logger.info(f"📊 Accuracy report sent: {total_resolved} signals, {stats.get('win_rate', 0)}% win rate")
         except Exception as e:
             logger.warning(f"Accuracy report error: {e}")
 

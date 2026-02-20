@@ -2,7 +2,7 @@ name: Pipeline D1
 
 on:
   schedule:
-    - cron: '*/15 * * * *'  # Every 15 minutes â€” check pending signals
+    - cron: '*/15 * * * *'  # Every 15 minutes — check pending signals
   workflow_dispatch:  # Manual trigger
 
 jobs:
