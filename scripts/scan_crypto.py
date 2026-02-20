@@ -25,7 +25,7 @@ from src.analysis.multi_timeframe import multi_timeframe_confluence
 from src.analysis.smart_money import smart_money_analysis
 from src.analysis.sentiment import fetch_crypto_news, keyword_sentiment_score
 from src.analysis.macro_filter import analyze_macro, should_filter_signal
-from src.signals.detector import detect_signal
+from src.signals.detector import detect_signal, apply_pre_trade_filters, check_divergence
 from src.signals.risk_manager import calculate_risk
 from src.signals.scorer import calculate_confidence
 from src.signals.validator import validate_signal
@@ -98,7 +98,20 @@ async def scan_symbol(
         # 6. Signal detection
         signal = detect_signal(indicators, mtf_result, sm_result)
 
+        # 6.1. Divergence fallback — when main signal is NEUTRAL, try RSI divergence
         if signal["direction"] == "NEUTRAL":
+            div = check_divergence(primary_df, indicators)
+            if div.get("direction") and div["direction"] != "NEUTRAL":
+                signal = div
+                logger.debug(f"[{symbol}] Divergence signal: {signal['direction']} ({signal['tier_name']})")
+            else:
+                return result
+
+        # 6.2. Pre-trade filters — Session Killzone, Market Regime, News Kill
+        signal = apply_pre_trade_filters(signal, primary_df, symbol)
+        if signal["direction"] == "NEUTRAL":
+            if signal.get("filtered_by"):
+                logger.info(f"[{symbol}] Pre-trade filtered: {'; '.join(signal['filtered_by'])}")
             return result
 
         # 6.5. Circuit breaker — check direction limit
@@ -166,6 +179,17 @@ async def scan_symbol(
         confidence = score_result["total"]
         grade = score_result["grade"]
         ml_features = score_result.get("features")  # Feature snapshot for ML training
+
+        # 10.1. Fix tier_numeric in ML features — tier is known only after detect_signal()
+        if ml_features and signal.get("tier_name"):
+            _tier_map = {"EXTREME": 6, "STRONG": 5, "MODERATE": 4,
+                         "SPECULATIVE": 3, "DIVERGENCE": 2, "CONTRARIAN": 1, "WEAK": 1}
+            _tn = 0
+            for _k, _v in _tier_map.items():
+                if _k in signal["tier_name"].upper():
+                    _tn = _v
+                    break
+            ml_features["tier_numeric"] = _tn
 
         if confidence < MIN_CONFIDENCE:
             return result

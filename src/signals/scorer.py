@@ -466,19 +466,21 @@ def _score_funding_rate(funding: dict, direction: str) -> int:
             return -15       # Strong penalty for long
         elif rate > 0.01:   # High positive
             return -8
+        # Fix: check < -0.05 BEFORE < -0.01, otherwise < -0.05 is never reached
+        elif rate < -0.05:  # Very negative = shorts overcrowded → strong buy signal
+            return 10
         elif rate < -0.01:  # Negative = shorts paying, bullish for longs
             return 8
-        elif rate < -0.05:  # Very negative = shorts overcrowded
-            return 10
     else:  # SELL / SHORT
         if rate < -0.05:    # Very negative = shorts overcrowded
             return -15
         elif rate < -0.01:
             return -8
+        # Fix: check > 0.05 BEFORE > 0.01, otherwise > 0.05 is never reached
+        elif rate > 0.05:   # Very high positive = longs overcrowded → strong sell signal
+            return 10
         elif rate > 0.01:   # Positive = longs paying, good for shorts
             return 8
-        elif rate > 0.05:
-            return 10
 
     return 0
 
