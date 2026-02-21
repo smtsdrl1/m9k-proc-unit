@@ -1,0 +1,50 @@
+name: Pipeline E1 — Telegram Bot Commands
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'   # Every 5 minutes — check for new commands
+  workflow_dispatch:          # Manual trigger
+
+jobs:
+  telegram-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Create data directory
+        run: mkdir -p data charts
+
+      - name: Download DB artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: signal-db-latest
+          path: data/
+        continue-on-error: true
+
+      - name: Process Telegram Commands
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: python scripts/telegram_bot.py
+
+      - name: Upload DB artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-db-latest
+          path: data/
+          retention-days: 90
+          overwrite: true

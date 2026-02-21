@@ -181,6 +181,59 @@ class CryptoFeed:
             logger.debug(f"Funding rate not available for {symbol}: {e}")
             return None
 
+    async def fetch_price_aggregated(self, symbol: str) -> Optional[dict]:
+        """
+        Fetch price from multiple exchanges and return median for accuracy.
+        Falls back to primary exchange if aggregation fails.
+
+        Returns: {"price": float, "median": float, "sources": int, ...}
+        """
+        from src.config import MULTI_EXCHANGE_AGGREGATION
+        if not MULTI_EXCHANGE_AGGREGATION:
+            return await self.fetch_ticker(symbol)
+
+        # Prioritize fast exchanges without geo-block for aggregation
+        agg_candidates = [
+            ("gate", {"enableRateLimit": True}),
+            ("kucoin", {"enableRateLimit": True}),
+            ("mexc", {"enableRateLimit": True}),
+        ]
+        prices = []
+
+        for ex_name, opts in agg_candidates:
+            try:
+                ex_class = getattr(ccxt, ex_name)
+                ex = ex_class({**opts, "options": {"defaultType": "spot"}})
+                ticker = await asyncio.wait_for(ex.fetch_ticker(symbol), timeout=8)
+                price = safe_float(ticker.get("last", 0))
+                if price > 0:
+                    prices.append(price)
+                await ex.close()
+            except Exception:
+                try:
+                    await ex.close()
+                except Exception:
+                    pass
+
+        if not prices:
+            return await self.fetch_ticker(symbol)
+
+        import statistics
+        median_price = statistics.median(prices)
+
+        return {
+            "symbol": symbol,
+            "price": median_price,
+            "median": median_price,
+            "mean": round(sum(prices) / len(prices), 8),
+            "sources": len(prices),
+            "all_prices": prices,
+            "volume_24h": 0,
+            "change_24h": 0,
+            "high_24h": max(prices),
+            "low_24h": min(prices),
+        }
+
     async def fetch_batch_funding_rates(self, symbols: list[str]) -> dict:
         """Fetch funding rates for multiple symbols."""
         results = {}

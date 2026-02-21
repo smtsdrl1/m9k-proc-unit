@@ -197,6 +197,24 @@ class Database:
                     win_rate REAL DEFAULT 0,
                     event TEXT DEFAULT 'SNAPSHOT'
                 );
+
+                CREATE TABLE IF NOT EXISTS paper_trade_journal (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    trade_id INTEGER NOT NULL,
+                    symbol TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    pnl_pct REAL DEFAULT 0,
+                    analysis TEXT NOT NULL,
+                    source TEXT DEFAULT 'rule_based',
+                    created_at TEXT NOT NULL,
+                    UNIQUE(trade_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS bot_state (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
             """)
             conn.commit()
         finally:
@@ -1024,6 +1042,125 @@ class Database:
                    SET status = 'EXPIRED', exit_timestamp = ?, last_checked_at = ?
                    WHERE status = 'OPEN' AND entry_timestamp < ?""",
                 (datetime.utcnow().isoformat(), datetime.utcnow().isoformat(), cutoff)
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    # ─── Closed Paper Trades ─────────────────────────────
+
+    def get_closed_paper_trades(self, limit: int = 10) -> list[dict]:
+        conn = self._get_conn()
+        try:
+            rows = conn.execute(
+                "SELECT * FROM paper_trades WHERE status != 'OPEN' "
+                "ORDER BY exit_timestamp DESC LIMIT ?",
+                (limit,)
+            ).fetchall()
+            return [self._paper_trade_to_dict(r) for r in rows]
+        finally:
+            conn.close()
+
+    def reset_paper_trading(self):
+        """Reset paper trading: close all open trades and clear portfolio history."""
+        conn = self._get_conn()
+        try:
+            now = datetime.utcnow().isoformat()
+            conn.execute(
+                "UPDATE paper_trades SET status='RESET', exit_timestamp=? WHERE status='OPEN'",
+                (now,)
+            )
+            conn.execute("DELETE FROM paper_portfolio")
+            conn.commit()
+        finally:
+            conn.close()
+
+    # ─── Post-Trade Journal ───────────────────────────────
+
+    def save_journal_entry(self, entry: dict) -> bool:
+        """Save AI post-trade journal entry. Silently ignores duplicates."""
+        import json as _json
+        conn = self._get_conn()
+        try:
+            conn.execute(
+                """INSERT OR IGNORE INTO paper_trade_journal
+                   (trade_id, symbol, status, pnl_pct, analysis, source, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    entry.get("trade_id"),
+                    entry.get("symbol", ""),
+                    entry.get("status", ""),
+                    entry.get("pnl_pct", 0),
+                    _json.dumps(entry.get("analysis", {}), ensure_ascii=False),
+                    entry.get("source", "rule_based"),
+                    entry.get("created_at", datetime.utcnow().isoformat()),
+                )
+            )
+            conn.commit()
+            return True
+        except Exception:
+            return False
+        finally:
+            conn.close()
+
+    def get_journal_entries(self, limit: int = 20) -> list[dict]:
+        import json as _json
+        conn = self._get_conn()
+        try:
+            rows = conn.execute(
+                "SELECT * FROM paper_trade_journal ORDER BY created_at DESC LIMIT ?",
+                (limit,)
+            ).fetchall()
+            result = []
+            for r in rows:
+                d = dict(zip(
+                    ["id", "trade_id", "symbol", "status", "pnl_pct",
+                     "analysis", "source", "created_at"],
+                    r
+                ))
+                try:
+                    d["analysis"] = _json.loads(d["analysis"])
+                except Exception:
+                    pass
+                result.append(d)
+            return result
+        finally:
+            conn.close()
+
+    def has_journal_entry(self, trade_id: int) -> bool:
+        conn = self._get_conn()
+        try:
+            row = conn.execute(
+                "SELECT 1 FROM paper_trade_journal WHERE trade_id=?", (trade_id,)
+            ).fetchone()
+            return row is not None
+        finally:
+            conn.close()
+
+    # ─── Bot State (key/value store for Telegram bot) ────
+
+    def get_bot_state(self, key: str, default=None):
+        conn = self._get_conn()
+        try:
+            row = conn.execute(
+                "SELECT value FROM bot_state WHERE key=?", (key,)
+            ).fetchone()
+            if row:
+                val = row[0]
+                try:
+                    return int(val)
+                except (ValueError, TypeError):
+                    return val
+            return default
+        finally:
+            conn.close()
+
+    def set_bot_state(self, key: str, value) -> None:
+        conn = self._get_conn()
+        try:
+            conn.execute(
+                "INSERT OR REPLACE INTO bot_state (key, value, updated_at) VALUES (?, ?, ?)",
+                (key, str(value), datetime.utcnow().isoformat())
             )
             conn.commit()
         finally:

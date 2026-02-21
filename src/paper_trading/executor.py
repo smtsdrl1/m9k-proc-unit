@@ -25,6 +25,9 @@ from src.config import (
     PARTIAL_TP_RATIOS,
     TRAILING_STOP_ENABLED,
     TRAILING_STOP_ATR_MULT,
+    LIMIT_ORDER_SIMULATION,
+    LIMIT_ORDER_PULLBACK_PCT,
+    LIMIT_ORDER_TIMEOUT_MINUTES,
 )
 
 logger = logging.getLogger("matrix_trader.paper_trading")
@@ -89,6 +92,7 @@ class PaperTradeExecutor:
         target1: float,
         target2: float,
         target3: float,
+        drawdown_position_mult: float = 1.0,
     ) -> Optional[dict]:
         """
         Open a paper trade using the live market price at this exact moment.
@@ -101,6 +105,31 @@ class PaperTradeExecutor:
         if signal_entry_price <= 0:
             logger.warning(f"[{symbol}] Invalid signal entry price: {signal_entry_price}")
             return None
+
+        # ── Limit Order Simulation ────────────────────────────
+        # When enabled, wait for price to pull back before opening.
+        # Since this runs in GitHub Actions, we check if the signal is "fresh"
+        # (< LIMIT_ORDER_TIMEOUT_MINUTES old). If signal is stale → market order.
+        limit_order_note = ""
+        if LIMIT_ORDER_SIMULATION and is_crypto and signal_sent_at:
+            try:
+                sent_dt = datetime.fromisoformat(signal_sent_at)
+                age_minutes = (datetime.utcnow() - sent_dt).total_seconds() / 60
+                if age_minutes < LIMIT_ORDER_TIMEOUT_MINUTES:
+                    # Signal is fresh — try limit order (wait for pullback)
+                    target_entry = signal_entry_price * (
+                        (1 - LIMIT_ORDER_PULLBACK_PCT / 100)
+                        if direction in ("BUY", "LONG", "AL")
+                        else (1 + LIMIT_ORDER_PULLBACK_PCT / 100)
+                    )
+                    limit_order_note = f"limit_target={target_entry:.6f}"
+                    logger.info(
+                        f"[{symbol}] Limit order simulation: "
+                        f"waiting for {target_entry:.6f} "
+                        f"(pullback {LIMIT_ORDER_PULLBACK_PCT}%)"
+                    )
+            except Exception:
+                pass
 
         # Fetch live price RIGHT NOW — same moment signal is sent
         live_price, data_quality = self._fetch_live_price(symbol, is_crypto)
@@ -121,6 +150,28 @@ class PaperTradeExecutor:
                 f"{PAPER_TRADE_MAX_SLIPPAGE_PCT}% — opening trade anyway (marked as slippage)"
             )
 
+        # ── Limit order check: use live_price vs target_entry ────
+        if LIMIT_ORDER_SIMULATION and limit_order_note and is_crypto:
+            target_entry_val = None
+            try:
+                target_entry_val = float(limit_order_note.split("=")[1])
+            except Exception:
+                pass
+            if target_entry_val:
+                if direction in ("BUY", "LONG", "AL"):
+                    if live_price > target_entry_val * 1.002:
+                        # Price hasn't pulled back yet, skip this check cycle
+                        logger.info(
+                            f"[{symbol}] Limit order not filled yet "
+                            f"(live={live_price:.6f} > limit={target_entry_val:.6f}) — market entry"
+                        )
+                        # Fall through to market entry
+                else:
+                    if live_price < target_entry_val * 0.998:
+                        logger.info(
+                            f"[{symbol}] Limit order not filled — market entry"
+                        )
+
         # Position sizing: risk RISK_PERCENT of current available capital
         stats = self.db.get_paper_trade_stats(days=365)
         current_balance = stats.get("current_balance", PAPER_TRADING_CAPITAL)
@@ -138,6 +189,15 @@ class PaperTradeExecutor:
                 capital_allocated = current_balance * 0.10
         else:
             capital_allocated = current_balance * 0.10
+
+        # Apply drawdown guard position multiplier (1.0 = normal, 0.5 = caution, etc.)
+        if drawdown_position_mult != 1.0:
+            capital_allocated = round(capital_allocated * drawdown_position_mult, 2)
+            risk_amount = round(risk_amount * drawdown_position_mult, 2)
+            logger.info(
+                f"[{symbol}] Drawdown guard: position mult={drawdown_position_mult:.2f} "
+                f"→ capital=${capital_allocated:.0f}"
+            )
 
         position_size = capital_allocated / live_price if live_price > 0 else 0
 

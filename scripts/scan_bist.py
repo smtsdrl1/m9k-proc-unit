@@ -17,7 +17,7 @@ from src.config import (
     MIN_CONFIDENCE, SIGNAL_COOLDOWN_MINUTES,
     CIRCUIT_BREAKER_ENABLED,
     MAX_SIGNALS_PER_BIST_RUN, SL_HIT_CONFIDENCE_BOOST, SL_HIT_LOOKBACK_HOURS,
-    PAPER_TRADING_ENABLED,
+    PAPER_TRADING_ENABLED, KAP_FILTER_ENABLED,
 )
 from src.data.bist_feed import BistFeed
 from src.data.macro_feed import MacroFeed
@@ -48,11 +48,26 @@ async def scan_symbol(
     db: Database,
     macro_result: dict,
     circuit_breaker: CircuitBreaker = None,
+    min_confidence: int = None,
 ) -> dict:
     """Scan a single BIST symbol through full pipeline. Returns signal info or None."""
     result = {"symbol": symbol, "signal_data": None, "error": None}
 
+    effective_min_confidence = min_confidence if min_confidence is not None else MIN_CONFIDENCE
+
     try:
+        # KAP filter — suppress signals around financial disclosures
+        if KAP_FILTER_ENABLED:
+            try:
+                from src.data.kap_feed import should_suppress_signal
+                kap = should_suppress_signal(symbol)
+                if kap.get("suppress"):
+                    logger.info(f"[{symbol}] KAP suppression: {kap.get('reason', '')}")
+                    result["error"] = "kap_suppressed"
+                    return result
+            except Exception:
+                pass
+
         # Circuit breaker check
         if circuit_breaker and CIRCUIT_BREAKER_ENABLED:
             can_trade, cb_reason = circuit_breaker.can_trade()
@@ -146,7 +161,7 @@ async def scan_symbol(
             df=primary_df,
             symbol=symbol,
         )
-        if pre_score["total"] < MIN_CONFIDENCE - 15:
+        if pre_score["total"] < effective_min_confidence - 15:
             return result
 
         # Sentiment (keyword-based — saves Groq budget for AI analysis)
@@ -182,12 +197,12 @@ async def scan_symbol(
                     break
             ml_features["tier_numeric"] = _tn
 
-        if confidence < MIN_CONFIDENCE:
+        if confidence < effective_min_confidence:
             return result
 
         # SL hit recently? BIST requires higher confidence for re-entry.
         if db.was_sl_hit_recently(symbol, SL_HIT_LOOKBACK_HOURS):
-            required = MIN_CONFIDENCE + SL_HIT_CONFIDENCE_BOOST
+            required = effective_min_confidence + SL_HIT_CONFIDENCE_BOOST
             if confidence < required:
                 logger.info(
                     f"[{symbol}] SL hit recently → require confidence ≥{required} "
@@ -199,7 +214,7 @@ async def scan_symbol(
         valid, errors = validate_signal(
             symbol, indicators["currentPrice"], risk_mgmt,
             confidence, signal["direction"],
-            is_bist=True, min_confidence=MIN_CONFIDENCE,
+            is_bist=True, min_confidence=effective_min_confidence,
         )
         if not valid:
             logger.warning(f"[{symbol}] Validation failed: {errors}")
@@ -318,10 +333,19 @@ async def main():
     except Exception as e:
         logger.warning(f"Macro fetch error: {e}")
 
+    # Adaptive confidence threshold based on recent performance
+    from src.signals.adaptive_threshold import get_adaptive_threshold
+    adaptive_threshold = get_adaptive_threshold(db, is_crypto=False)
+    if adaptive_threshold != MIN_CONFIDENCE:
+        logger.info(f"BIST adaptive threshold: {MIN_CONFIDENCE} → {adaptive_threshold}")
+
     # Scan each symbol
     for i, symbol in enumerate(BIST_100):
         try:
-            result = await scan_symbol(symbol, feed, groq, db, macro_result, circuit_breaker)
+            result = await scan_symbol(
+                symbol, feed, groq, db, macro_result, circuit_breaker,
+                min_confidence=adaptive_threshold,
+            )
             sig = result.get("signal_data")
 
             if sig:
@@ -368,25 +392,42 @@ async def main():
                     if PAPER_TRADING_ENABLED and signal_id:
                         try:
                             from src.paper_trading.executor import PaperTradeExecutor
-                            executor = PaperTradeExecutor(db)
-                            targets = sig["risk_mgmt"].get("targets", {})
-                            trade = executor.open_trade(
-                                signal_id=signal_id,
-                                symbol=sig["symbol"],
-                                direction=sig["direction"],
-                                is_crypto=False,
-                                signal_tier=sig["tier_name"],
-                                signal_confidence=sig["confidence"],
-                                signal_sent_at=datetime.utcnow().isoformat(),
-                                signal_entry_price=sig["indicators"]["currentPrice"],
-                                stop_loss=sig["risk_mgmt"].get("stop_loss", 0),
-                                target1=targets.get("t1", 0),
-                                target2=targets.get("t2", 0),
-                                target3=targets.get("t3", 0),
-                            )
-                            if trade:
-                                paper_msg = executor.format_trade_open_message(trade)
-                                await sender.send_message(paper_msg)
+                            from src.paper_trading.drawdown_guard import DrawdownGuard
+
+                            guard = DrawdownGuard(db)
+                            guard_info = guard.get_mode()
+
+                            if not guard_info["can_trade"]:
+                                logger.warning(
+                                    f"[{symbol}] Paper trade BLOCKED by drawdown guard "
+                                    f"(mode={guard_info['mode']})"
+                                )
+                            elif not guard.is_tier_allowed(sig["tier_name"], guard_info["mode"]):
+                                logger.info(
+                                    f"[{symbol}] Paper trade skipped: tier {sig['tier_name']} "
+                                    f"not allowed in {guard_info['mode']} mode"
+                                )
+                            else:
+                                executor = PaperTradeExecutor(db)
+                                targets = sig["risk_mgmt"].get("targets", {})
+                                trade = executor.open_trade(
+                                    signal_id=signal_id,
+                                    symbol=sig["symbol"],
+                                    direction=sig["direction"],
+                                    is_crypto=False,
+                                    signal_tier=sig["tier_name"],
+                                    signal_confidence=sig["confidence"],
+                                    signal_sent_at=datetime.utcnow().isoformat(),
+                                    signal_entry_price=sig["indicators"]["currentPrice"],
+                                    stop_loss=sig["risk_mgmt"].get("stop_loss", 0),
+                                    target1=targets.get("t1", 0),
+                                    target2=targets.get("t2", 0),
+                                    target3=targets.get("t3", 0),
+                                    drawdown_position_mult=guard_info["position_mult"],
+                                )
+                                if trade:
+                                    paper_msg = executor.format_trade_open_message(trade)
+                                    await sender.send_message(paper_msg)
                         except Exception as e:
                             logger.error(f"[{symbol}] Paper trade open error: {e}")
 

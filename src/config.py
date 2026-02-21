@@ -206,3 +206,41 @@ SL_HIT_LOOKBACK_HOURS      = 24  # Bu süre içinde SL yendiği varsa boost uygu
 PAPER_TRADING_ENABLED         = True
 PAPER_TRADING_CAPITAL         = 10000.0   # Başlangıç demo bakiyesi ($)
 PAPER_TRADE_MAX_SLIPPAGE_PCT  = 1.0       # İzin verilen max kayma (%)
+
+# ─── Adaptive Confidence Thresholds ─────────────────────────
+ADAPTIVE_THRESHOLD_ENABLED    = True
+ADAPTIVE_THRESHOLD_HIGH_WR    = 65        # Win rate > 65% → eşiği 5 düşür
+ADAPTIVE_THRESHOLD_LOW_WR     = 40        # Win rate < 40% → eşiği 10 arttır
+ADAPTIVE_THRESHOLD_RELAX      = 5
+ADAPTIVE_THRESHOLD_TIGHTEN    = 10
+
+# ─── Drawdown Recovery Guard ─────────────────────────────────
+DRAWDOWN_CAUTION_PCT          = 10.0      # %10 DD → CAUTION
+DRAWDOWN_DEFENSIVE_PCT        = 20.0      # %20 DD → DEFENSIVE
+DRAWDOWN_HALT_PCT             = 30.0      # %30 DD → HALT
+
+# ─── Order Book Imbalance ─────────────────────────────────────
+ORDERBOOK_ENABLED             = True
+ORDERBOOK_DEPTH               = 20        # Analiz edilecek seviye sayısı
+ORDERBOOK_IMBALANCE_THRESHOLD = 2.0       # bid/ask oranı üstü = güçlü imbalance
+ORDERBOOK_MAX_BOOST           = 8         # Max confidence boost
+
+# ─── On-Chain Data (CoinGecko free) ──────────────────────────
+ONCHAIN_FEED_ENABLED          = True
+BTC_DOMINANCE_HIGH_THRESHOLD  = 62.0      # BTC.D > 62% = alt coinler için caution
+BTC_DOMINANCE_LOW_THRESHOLD   = 40.0      # BTC.D < 40% = alt coinler için boost
+
+# ─── Post-Trade AI Journal ────────────────────────────────────
+JOURNAL_ENABLED               = True
+
+# ─── KAP Calendar (BIST) ──────────────────────────────────────
+KAP_FILTER_ENABLED            = True
+KAP_BLACKOUT_MINUTES          = 30        # Açıklama öncesi/sonrası blok süresi
+
+# ─── Limit Order Simulation ──────────────────────────────────
+LIMIT_ORDER_SIMULATION        = False     # Açık: limit emir simülasyonu (15dk bekleme)
+LIMIT_ORDER_PULLBACK_PCT      = 0.3       # Sinyal fiyatından %0.3 geri çekilme bekle
+LIMIT_ORDER_TIMEOUT_MINUTES   = 15        # Bu süre içinde dolmazsa market fiyatından gir
+
+# ─── Multi-Exchange Price Aggregation ────────────────────────
+MULTI_EXCHANGE_AGGREGATION    = True      # Birden fazla borsadan median fiyat

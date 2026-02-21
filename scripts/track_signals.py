@@ -109,6 +109,40 @@ async def main():
                     except Exception as e:
                         logger.error(f"Paper trade notification error: {e}")
 
+                # Post-trade AI journal for newly closed trades
+                try:
+                    from src.paper_trading.journal import generate_journal_entry, format_journal_message
+                    from src.ai.groq_engine import GroqEngine
+                    groq = GroqEngine()
+
+                    # Get recently closed trades without journal entries
+                    recent_closed = db.get_closed_paper_trades(limit=20)
+                    for trade in recent_closed:
+                        if db.has_journal_entry(trade["id"]):
+                            continue
+                        # Only journal trades closed in the last hour
+                        if trade.get("exit_timestamp"):
+                            from datetime import timezone
+                            try:
+                                exit_dt = datetime.fromisoformat(trade["exit_timestamp"])
+                                age_h = (datetime.utcnow() - exit_dt).total_seconds() / 3600
+                                if age_h > 1:
+                                    continue
+                            except Exception:
+                                pass
+                        journal = generate_journal_entry(trade, groq)
+                        if journal:
+                            db.save_journal_entry(journal)
+                            journal_msg = format_journal_message(journal)
+                            if journal_msg:
+                                await sender.send_message(journal_msg)
+                                logger.info(
+                                    f"📓 Journal entry saved: {trade['symbol']} "
+                                    f"({journal['analysis'].get('skor', 5)}/10)"
+                                )
+                except Exception as e:
+                    logger.warning(f"Post-trade journal error: {e}")
+
                 # Daily paper trading stats (15:30-15:45 UTC window)
                 try:
                     from datetime import datetime as _dt

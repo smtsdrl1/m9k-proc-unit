@@ -18,7 +18,7 @@ from src.config import (
     MIN_CONFIDENCE, SIGNAL_COOLDOWN_MINUTES,
     CIRCUIT_BREAKER_ENABLED, FUNDING_RATE_ENABLED,
     MAX_SIGNALS_PER_CRYPTO_RUN, SL_HIT_CONFIDENCE_BOOST, SL_HIT_LOOKBACK_HOURS,
-    PAPER_TRADING_ENABLED,
+    PAPER_TRADING_ENABLED, ORDERBOOK_ENABLED, ONCHAIN_FEED_ENABLED,
 )
 from src.data.crypto_feed import CryptoFeed
 from src.data.macro_feed import MacroFeed
@@ -51,9 +51,14 @@ async def scan_symbol(
     macro_result: dict,
     circuit_breaker: CircuitBreaker = None,
     fear_greed: int = 50,
+    min_confidence: int = None,
+    onchain_data: dict = None,
 ) -> dict:
     """Scan a single crypto symbol through the full pipeline."""
     result = {"symbol": symbol, "signal": False, "error": None}
+
+    # Use adaptive threshold if provided, otherwise fall back to MIN_CONFIDENCE
+    effective_min_confidence = min_confidence if min_confidence is not None else MIN_CONFIDENCE
 
     try:
         # 0. Circuit breaker check — skip scanning if system is paused
@@ -168,7 +173,26 @@ async def scan_symbol(
             except Exception as e:
                 logger.warning(f"[{symbol}] Funding rate error: {e}")
 
-        # 10. Confidence scoring (with ML adjustment + funding rate + advanced df analysis)
+        # 9.6. Order book analysis (crypto only)
+        ob_data = None
+        if ORDERBOOK_ENABLED:
+            try:
+                ob_data = await feed.fetch_order_book(symbol, limit=20)
+            except Exception as e:
+                logger.debug(f"[{symbol}] Order book error: {e}")
+
+        # 9.7. On-chain confidence boost from pre-fetched global data
+        onchain_boost = None
+        if ONCHAIN_FEED_ENABLED and onchain_data:
+            try:
+                from src.data.onchain_feed import get_onchain_confidence_boost
+                onchain_boost = get_onchain_confidence_boost(
+                    onchain_data, symbol, signal["direction"], is_crypto=True
+                )
+            except Exception as e:
+                logger.debug(f"[{symbol}] OnChain boost error: {e}")
+
+        # 10. Confidence scoring (with ML adjustment + funding rate + OB + on-chain + advanced df)
         score_result = calculate_confidence(
             indicators, signal["direction"],
             mtf_result, sentiment_result, sm_result, macro_result,
@@ -177,6 +201,8 @@ async def scan_symbol(
             funding_rate=funding_rate,
             df=primary_df,
             symbol=symbol,
+            order_book=ob_data,
+            onchain=onchain_boost,
         )
         confidence = score_result["total"]
         grade = score_result["grade"]
@@ -193,12 +219,12 @@ async def scan_symbol(
                     break
             ml_features["tier_numeric"] = _tn
 
-        if confidence < MIN_CONFIDENCE:
+        if confidence < effective_min_confidence:
             return result
 
         # 10.5. SL hit recently? Raise confidence bar for re-entry.
         if db.was_sl_hit_recently(symbol, SL_HIT_LOOKBACK_HOURS):
-            required = MIN_CONFIDENCE + SL_HIT_CONFIDENCE_BOOST
+            required = effective_min_confidence + SL_HIT_CONFIDENCE_BOOST
             if confidence < required:
                 logger.info(
                     f"[{symbol}] SL hit recently → require confidence ≥{required} "
@@ -208,7 +234,7 @@ async def scan_symbol(
         valid, errors = validate_signal(
             symbol, indicators["currentPrice"], risk_mgmt,
             confidence, signal["direction"],
-            is_bist=False, min_confidence=MIN_CONFIDENCE,
+            is_bist=False, min_confidence=effective_min_confidence,
         )
         if not valid:
             logger.warning(f"[{symbol}] Validation failed: {errors}")
@@ -304,25 +330,44 @@ async def scan_symbol(
             if PAPER_TRADING_ENABLED and signal_id:
                 try:
                     from src.paper_trading.executor import PaperTradeExecutor
-                    executor = PaperTradeExecutor(db)
-                    targets = risk_mgmt.get("targets", {})
-                    trade = executor.open_trade(
-                        signal_id=signal_id,
-                        symbol=symbol,
-                        direction=signal["direction"],
-                        is_crypto=True,
-                        signal_tier=signal["tier_name"],
-                        signal_confidence=confidence,
-                        signal_sent_at=datetime.utcnow().isoformat(),
-                        signal_entry_price=indicators["currentPrice"],
-                        stop_loss=risk_mgmt.get("stop_loss", 0),
-                        target1=targets.get("t1", 0),
-                        target2=targets.get("t2", 0),
-                        target3=targets.get("t3", 0),
-                    )
-                    if trade:
-                        paper_msg = executor.format_trade_open_message(trade)
-                        await sender.send_message(paper_msg)
+                    from src.paper_trading.drawdown_guard import DrawdownGuard
+
+                    guard = DrawdownGuard(db)
+                    guard_info = guard.get_mode()
+
+                    if not guard_info["can_trade"]:
+                        logger.warning(
+                            f"[{symbol}] Paper trade BLOCKED by drawdown guard "
+                            f"(mode={guard_info['mode']}, DD={guard_info['drawdown_pct']}%)"
+                        )
+                    else:
+                        # Check if tier is allowed under current drawdown mode
+                        if not guard.is_tier_allowed(signal["tier_name"], guard_info["mode"]):
+                            logger.info(
+                                f"[{symbol}] Paper trade skipped: tier {signal['tier_name']} "
+                                f"not allowed in {guard_info['mode']} mode"
+                            )
+                        else:
+                            executor = PaperTradeExecutor(db)
+                            targets = risk_mgmt.get("targets", {})
+                            trade = executor.open_trade(
+                                signal_id=signal_id,
+                                symbol=symbol,
+                                direction=signal["direction"],
+                                is_crypto=True,
+                                signal_tier=signal["tier_name"],
+                                signal_confidence=confidence,
+                                signal_sent_at=datetime.utcnow().isoformat(),
+                                signal_entry_price=indicators["currentPrice"],
+                                stop_loss=risk_mgmt.get("stop_loss", 0),
+                                target1=targets.get("t1", 0),
+                                target2=targets.get("t2", 0),
+                                target3=targets.get("t3", 0),
+                                drawdown_position_mult=guard_info["position_mult"],
+                            )
+                            if trade:
+                                paper_msg = executor.format_trade_open_message(trade)
+                                await sender.send_message(paper_msg)
                 except Exception as e:
                     logger.error(f"[{symbol}] Paper trade open error: {e}")
 
@@ -364,17 +409,44 @@ async def main():
         except Exception as e:
             logger.warning(f"Macro fetch error: {e}")
 
+        # Pre-fetch on-chain data (single call for all symbols)
+        onchain_global = None
+        if ONCHAIN_FEED_ENABLED:
+            try:
+                from src.data.onchain_feed import fetch_global_data
+                onchain_global = fetch_global_data()
+                if onchain_global:
+                    logger.info(
+                        f"OnChain: BTC.D={onchain_global['btc_dominance']}%, "
+                        f"market_chg={onchain_global['market_cap_change_24h']}%"
+                    )
+            except Exception as e:
+                logger.warning(f"OnChain fetch error: {e}")
+
+        # Adaptive confidence threshold based on recent performance
+        from src.signals.adaptive_threshold import get_adaptive_threshold
+        adaptive_threshold = get_adaptive_threshold(db, is_crypto=True)
+        if adaptive_threshold != MIN_CONFIDENCE:
+            logger.info(f"Adaptive threshold: {MIN_CONFIDENCE} → {adaptive_threshold}")
+
         # Scan each symbol
         for i, symbol in enumerate(CRYPTO_SYMBOLS):
             try:
-                result = await scan_symbol(symbol, feed, groq, sender, db, macro_result, circuit_breaker, fear_greed=fear_greed_val)
-                if result["signal"]:
-                    signals_found += 1
-                if result["error"] and result["error"] not in ("cooldown", "no_data"):
-                    errors += 1
+                result = await scan_symbol(
+                    symbol, feed, groq, sender, db, macro_result, circuit_breaker,
+                    fear_greed=fear_greed_val,
+                    min_confidence=adaptive_threshold,
+                    onchain_data=onchain_global,
+                )
             except Exception as e:
+                result = {"signal": False, "error": str(e)}
                 errors += 1
                 logger.error(f"[{symbol}] Unhandled error: {e}")
+
+            if result.get("signal"):
+                signals_found += 1
+            if result.get("error") and result["error"] not in ("cooldown", "no_data", "circuit_breaker"):
+                errors += 1
 
             # Early exit when max signals reached
             if signals_found >= MAX_SIGNALS_PER_CRYPTO_RUN:
