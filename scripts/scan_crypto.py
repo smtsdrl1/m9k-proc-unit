@@ -25,6 +25,8 @@ from src.config import (
     PAPER_TRADING_ENABLED, ORDERBOOK_ENABLED, ONCHAIN_FEED_ENABLED,
     ULTRA_FILTER_ENABLED, ULTRA_CONFIDENCE_MIN,
     CONSENSUS_ENGINE_ENABLED, BTC_TREND_FILTER_ENABLED, BTC_TREND_STRICT_MODE,
+    SCALP_MODE_ENABLED, SCALP_CONFIDENCE_MIN, SCALP_CONSENSUS_REQUIRED,
+    SCALP_ADX_MIN, SCALP_VOLUME_RATIO_MIN, SCALP_RR_MIN,
 )
 from src.data.crypto_feed import CryptoFeed
 from src.data.macro_feed import MacroFeed
@@ -68,12 +70,17 @@ async def scan_symbol(
     min_confidence: int = None,
     onchain_data: dict = None,
     btc_trend: dict = None,
+    mode: str = "SWING",                   # "SWING" = precision 4h | "SCALP" = fast 15m
+    prefetched_tf_data: dict = None,       # pre-fetched OHLCV (avoids double fetch)
+    prefetched_tf_indicators: dict = None, # pre-computed indicators
 ) -> dict:
-    """Scan a single crypto symbol through the precision pipeline."""
+    """Scan a single crypto symbol — SWING (precision 4h) or SCALP (fast 15m) mode."""
     result = {"symbol": symbol, "signal": False, "error": None}
 
-    # In precision mode use ultra threshold; otherwise adaptive/default
-    if ULTRA_FILTER_ENABLED:
+    # Threshold depends on mode: scalp is more lenient, swing uses ultra/adaptive
+    if mode == "SCALP":
+        effective_min_confidence = SCALP_CONFIDENCE_MIN
+    elif ULTRA_FILTER_ENABLED:
         effective_min_confidence = ULTRA_CONFIDENCE_MIN
     else:
         effective_min_confidence = min_confidence if min_confidence is not None else MIN_CONFIDENCE
@@ -92,25 +99,40 @@ async def scan_symbol(
             result["error"] = "cooldown"
             return result
 
-        # 2. Fetch multi-timeframe data
-        tf_data = await feed.fetch_multi_timeframe(symbol, CRYPTO_TIMEFRAMES)
-        if not tf_data:
-            result["error"] = "no_data"
-            return result
+        # 2. Fetch multi-timeframe data (use prefetched if available — avoids double fetch)
+        if prefetched_tf_data is not None:
+            tf_data = prefetched_tf_data
+            tf_indicators = prefetched_tf_indicators or {}
+        else:
+            tf_data = await feed.fetch_multi_timeframe(symbol, CRYPTO_TIMEFRAMES)
+            if not tf_data:
+                result["error"] = "no_data"
+                return result
 
-        # 3. Calculate indicators for each timeframe
-        tf_indicators = {}
-        for tf, df in tf_data.items():
-            ind = calculate_indicators(df)
-            if ind:
-                tf_indicators[tf] = ind
+            # 3. Calculate indicators for each timeframe
+            tf_indicators = {}
+            for tf, df in tf_data.items():
+                ind = calculate_indicators(df)
+                if ind:
+                    tf_indicators[tf] = ind
 
         if not tf_indicators:
             result["error"] = "no_indicators"
             return result
 
-        # Use the highest timeframe for primary analysis
-        primary_tf = list(tf_indicators.keys())[-1]
+        # Select primary timeframe based on mode
+        if mode == "SCALP":
+            # Prefer shorter TFs for scalp (15m → 5m → 1h fallback)
+            for preferred_tf in ["15m", "5m", "1h"]:
+                if preferred_tf in tf_indicators:
+                    primary_tf = preferred_tf
+                    break
+            else:
+                primary_tf = list(tf_indicators.keys())[0]
+        else:
+            # SWING: use highest available TF for macro picture
+            primary_tf = list(tf_indicators.keys())[-1]
+
         indicators = tf_indicators[primary_tf]
         primary_df = tf_data[primary_tf]
 
@@ -169,8 +191,8 @@ async def scan_symbol(
             df=primary_df,
             symbol=symbol,
         )
-        if pre_score["total"] < MIN_CONFIDENCE - 15:
-            # Even with max sentiment boost, won't reach MIN_CONFIDENCE
+        if pre_score["total"] < effective_min_confidence - 15:
+            # Even with max sentiment boost, won't reach effective threshold
             return result
 
         # 9. Sentiment (keyword-based — saves Groq budget for AI analysis)
@@ -252,8 +274,9 @@ async def scan_symbol(
                 result["error"] = "btc_trend_block"
                 return result
 
-        # ── Precision Gate B: Ultra-Strict Mandatory Filter ───────
-        if ULTRA_FILTER_ENABLED:
+        # ── Precision Gate B: Mode-based mandatory filter ─────────
+        if mode == "SWING" and ULTRA_FILTER_ENABLED:
+            # SWING: full 10-gate ultra filter (strict)
             uf_result = _ultra_filter.check(
                 indicators=indicators,
                 signal_direction=signal["direction"],
@@ -271,12 +294,27 @@ async def scan_symbol(
                 result["error"] = "ultra_filter"
                 return result
             logger.debug(
-                f"[{symbol}] UltraFilter PASS "
+                f"[{symbol}][SWING] UltraFilter PASS "
                 f"({uf_result['gates_passed']}/{uf_result['gates_total']}) "
                 f"entry={uf_result['entry_quality']}"
             )
+        elif mode == "SCALP":
+            # SCALP: lighter manual checks (ADX + volume + R:R)
+            adx_val  = indicators.get("adx", 0)
+            vol_rat  = indicators.get("volume_ratio", 1.0)
+            rr_val   = risk_mgmt.get("risk_reward_ratio", 0) or 0
+            if adx_val < SCALP_ADX_MIN:
+                result["error"] = f"scalp_adx_low"
+                return result
+            if vol_rat < SCALP_VOLUME_RATIO_MIN:
+                result["error"] = f"scalp_vol_low"
+                return result
+            if rr_val < SCALP_RR_MIN:
+                result["error"] = f"scalp_rr_low"
+                return result
 
         # ── Precision Gate C: 12-System Consensus Engine ──────────
+        cv_result = None
         if CONSENSUS_ENGINE_ENABLED:
             cv_result = _consensus.vote(
                 indicators=indicators,
@@ -288,12 +326,21 @@ async def scan_symbol(
                 order_book=ob_data,
                 df=primary_df,
             )
-            if not cv_result["passes"]:
+            # Mode-specific consensus threshold
+            if mode == "SCALP":
+                consensus_ok = (
+                    cv_result["net_for"] >= SCALP_CONSENSUS_REQUIRED
+                    and cv_result["net_against"] <= 1
+                )
+            else:
+                consensus_ok = cv_result["passes"]  # CONSENSUS_REQUIRED=8, max_against=1
+
+            if not consensus_ok:
+                need = SCALP_CONSENSUS_REQUIRED if mode == "SCALP" else 8
                 logger.info(
-                    f"[{symbol}] Consensus FAIL: "
+                    f"[{symbol}][{mode}] Consensus FAIL: "
                     f"{cv_result['net_for']}✅ {cv_result['net_against']}❌ "
-                    f"({cv_result['agreement_pct']:.0f}%) — need "
-                    f"8✅ max 1❌ | contra={cv_result['contra_signals']}"
+                    f"({cv_result['agreement_pct']:.0f}%) — need {need}✅ max 1❌"
                 )
                 result["error"] = "consensus_fail"
                 return result
@@ -382,11 +429,12 @@ async def scan_symbol(
             time_estimates=time_estimates,
         )
 
-        # 13.5 Append consensus info to message (precision mode)
-        if CONSENSUS_ENGINE_ENABLED and "cv_result" in dir():
+        # 13.5 Append consensus info + mode tag to message
+        if CONSENSUS_ENGINE_ENABLED and cv_result is not None:
             try:
                 consensus_line = _consensus.format_consensus_line(cv_result)
-                message += f"\n{consensus_line}"
+                mode_tag = "⚡ SCALP (15m)" if mode == "SCALP" else "📊 SWING (4h)"
+                message += f"\n{consensus_line}\n🏷 Mod: {mode_tag}"
             except Exception:
                 pass
 
@@ -408,7 +456,7 @@ async def scan_symbol(
             )
             db.set_cooldown(symbol, signal["direction"])
             result["signal"] = True
-            logger.info(f"✅ [{symbol}] {signal['direction']} signal sent (confidence: {confidence}%)")
+            logger.info(f"✅ [{symbol}][{mode}] {signal['direction']} signal sent (confidence: {confidence}%)")
 
             # Open paper trade using live price right now
             if PAPER_TRADING_ENABLED and signal_id:
@@ -466,9 +514,10 @@ async def main():
     """Main scanner loop — Precision Mode."""
     setup_logging()
     logger.info("=" * 60)
-    logger.info("🎯 Matrix Trader AI — Precision Crypto Scanner")
+    logger.info("🎯 Matrix Trader AI — Multi-Mode Crypto Scanner")
     logger.info(f"   Symbols: {len(_ACTIVE_SYMBOLS)} (top-20 liquid)")
-    logger.info(f"   Mode: {'ULTRA PRECISION' if ULTRA_FILTER_ENABLED else 'STANDARD'}")
+    logger.info(f"   Modes: {'SCALP(15m)+SWING(4h)' if SCALP_MODE_ENABLED else 'SWING(4h) only'}")
+    logger.info(f"   TFs: {CRYPTO_TIMEFRAMES}")
     logger.info("=" * 60)
 
     feed = CryptoFeed()
@@ -529,25 +578,76 @@ async def main():
             except Exception:
                 pass
 
-        # Scan each symbol (top-20 liquid in precision mode)
+        # Scan each symbol — fetch data ONCE, then run SCALP→SWING in sequence
+        _skip_errors = {
+            "cooldown", "no_data", "circuit_breaker", "btc_trend_block",
+            "ultra_filter", "consensus_fail",
+            "scalp_adx_low", "scalp_vol_low", "scalp_rr_low",
+        }
         for i, symbol in enumerate(_ACTIVE_SYMBOLS):
+            # ── Pre-fetch all TF data once per symbol ───────────────
             try:
-                result = await scan_symbol(
-                    symbol, feed, groq, sender, db, macro_result, circuit_breaker,
-                    fear_greed=fear_greed_val,
-                    min_confidence=adaptive_threshold,
-                    onchain_data=onchain_global,
-                    btc_trend=btc_trend_data,
-                )
+                pf_data = await feed.fetch_multi_timeframe(symbol, CRYPTO_TIMEFRAMES)
+                pf_ind = {}
+                if pf_data:
+                    for tf, df in pf_data.items():
+                        ind = calculate_indicators(df)
+                        if ind:
+                            pf_ind[tf] = ind
             except Exception as e:
-                result = {"signal": False, "error": str(e)}
+                logger.error(f"[{symbol}] Data fetch error: {e}")
                 errors += 1
-                logger.error(f"[{symbol}] Unhandled error: {e}")
+                continue
 
-            if result.get("signal"):
-                signals_found += 1
-            if result.get("error") and result["error"] not in ("cooldown", "no_data", "circuit_breaker"):
-                errors += 1
+            if not pf_ind:
+                continue
+
+            signal_sent = False
+
+            # ── Pass 1: SCALP mode (15m primary, lighter thresholds) ─
+            if SCALP_MODE_ENABLED:
+                try:
+                    r = await scan_symbol(
+                        symbol, feed, groq, sender, db, macro_result,
+                        circuit_breaker,
+                        fear_greed=fear_greed_val,
+                        min_confidence=adaptive_threshold,
+                        onchain_data=onchain_global,
+                        btc_trend=btc_trend_data,
+                        mode="SCALP",
+                        prefetched_tf_data=pf_data,
+                        prefetched_tf_indicators=pf_ind,
+                    )
+                    if r.get("signal"):
+                        signals_found += 1
+                        signal_sent = True
+                    elif r.get("error") and r["error"] not in _skip_errors:
+                        errors += 1
+                except Exception as e:
+                    logger.error(f"[{symbol}][SCALP] Error: {e}")
+                    errors += 1
+
+            # ── Pass 2: SWING mode (4h primary, full precision) ──────
+            if not signal_sent:
+                try:
+                    r = await scan_symbol(
+                        symbol, feed, groq, sender, db, macro_result,
+                        circuit_breaker,
+                        fear_greed=fear_greed_val,
+                        min_confidence=adaptive_threshold,
+                        onchain_data=onchain_global,
+                        btc_trend=btc_trend_data,
+                        mode="SWING",
+                        prefetched_tf_data=pf_data,
+                        prefetched_tf_indicators=pf_ind,
+                    )
+                    if r.get("signal"):
+                        signals_found += 1
+                    elif r.get("error") and r["error"] not in _skip_errors:
+                        errors += 1
+                except Exception as e:
+                    logger.error(f"[{symbol}][SWING] Error: {e}")
+                    errors += 1
 
             # Early exit when max signals reached
             if signals_found >= MAX_SIGNALS_PER_CRYPTO_RUN:
@@ -559,8 +659,8 @@ async def main():
                 await asyncio.sleep(2)
 
             # Progress
-            if (i + 1) % 20 == 0:
-                logger.info(f"Progress: {i + 1}/{len(CRYPTO_SYMBOLS)} ({signals_found} signals)")
+            if (i + 1) % 10 == 0:
+                logger.info(f"Progress: {i + 1}/{len(_ACTIVE_SYMBOLS)} | signals={signals_found}")
 
     finally:
         await feed.close()

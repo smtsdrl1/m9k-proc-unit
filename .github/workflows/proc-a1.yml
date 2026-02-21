@@ -2,7 +2,7 @@ name: Pipeline A1
 
 on:
   schedule:
-    - cron: '*/30 * * * *'  # Every 30 minutes (optimized for Groq rate limits)
+    - cron: '*/15 * * * *'  # Every 15 minutes — catches 15m scalp signals
   workflow_dispatch:  # Manual trigger
 
 jobs:

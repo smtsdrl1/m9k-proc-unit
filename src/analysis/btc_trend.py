@@ -25,7 +25,7 @@ logger = logging.getLogger("matrix_trader.analysis.btc_trend")
 
 # ── Cache ─────────────────────────────────────────────────────────────
 _CACHE: dict = {}
-_CACHE_TTL = 900  # 15 minutes (BTC trend doesn't change that fast)
+_CACHE_TTL = 300  # 5 minutes — 1h TF catches faster trend changes
 
 
 def get_btc_trend(feed) -> dict:
@@ -55,24 +55,24 @@ def get_btc_trend(feed) -> dict:
         import asyncio
         from src.analysis.technical import calculate_indicators
 
-        # Fetch BTC 4h data synchronously
+        # Fetch BTC 1h data synchronously (faster trend detection than 4h)
         loop = asyncio.new_event_loop()
         try:
-            df_4h = loop.run_until_complete(feed.fetch_ohlcv("BTC/USDT", "4h", limit=100))
+            df_1h = loop.run_until_complete(feed.fetch_ohlcv("BTC/USDT", "1h", limit=100))
         finally:
             loop.close()
 
-        if df_4h is None or len(df_4h) < 50:
-            result = _neutral_result("insufficient BTC 4h data")
+        if df_1h is None or len(df_1h) < 50:
+            result = _neutral_result("insufficient BTC 1h data")
             _CACHE["btc_trend"] = {"ts": now, "data": result}
             return result
 
-        result = _analyze_trend(df_4h)
+        result = _analyze_trend(df_1h)
         _CACHE["btc_trend"] = {"ts": now, "data": result}
         logger.info(
             f"BTC Trend: {result['trend']} ({result['strength']}) | "
-            f"EMA20={result['ema20_4h']:.0f} EMA50={result['ema50_4h']:.0f} "
-            f"ADX={result['adx_4h']:.1f}"
+            f"EMA20={result['ema20_1h']:.0f} EMA50={result['ema50_1h']:.0f} "
+            f"ADX={result['adx_1h']:.1f}"
         )
         return result
 
@@ -82,7 +82,7 @@ def get_btc_trend(feed) -> dict:
 
 
 def _analyze_trend(df: pd.DataFrame) -> dict:
-    """Analyze 4h DataFrame to determine BTC trend."""
+    """Analyze 1h DataFrame to determine BTC trend."""
     try:
         from src.analysis.technical import calculate_indicators
         ind = calculate_indicators(df)
@@ -146,16 +146,16 @@ def _analyze_trend(df: pd.DataFrame) -> dict:
         return {
             "trend":       trend,
             "strength":    strength,
-            "ema20_4h":    round(ema9, 2),   # Using ema9 as proxy for ema20
-            "ema50_4h":    round(ema50, 2),
-            "adx_4h":      round(adx, 1),
-            "rsi_4h":      round(rsi, 1),
+            "ema20_1h":    round(ema9, 2),   # Using ema9 as proxy for ema20 on 1h
+            "ema50_1h":    round(ema50, 2),
+            "adx_1h":      round(adx, 1),
+            "rsi_1h":      round(rsi, 1),
             "bias":        bias,
             "bull_ema":    bull_ema,
             "bear_ema":    bear_ema,
             "bull_struct": bull_structure,
             "bear_struct": bear_structure,
-            "description": f"BTC 4h: {trend} ({strength}) | bias={bias}",
+            "description": f"BTC 1h: {trend} ({strength}) | bias={bias}",
         }
 
     except Exception as e:
@@ -167,10 +167,10 @@ def _neutral_result(reason: str) -> dict:
     return {
         "trend":       "NEUTRAL",
         "strength":    "WEAK",
-        "ema20_4h":    0,
-        "ema50_4h":    0,
-        "adx_4h":      0,
-        "rsi_4h":      50,
+        "ema20_1h":    0,
+        "ema50_1h":    0,
+        "adx_1h":      0,
+        "rsi_1h":      50,
         "bias":        "BOTH",
         "description": f"BTC trend unknown: {reason}",
     }

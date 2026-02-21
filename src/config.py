@@ -32,7 +32,7 @@ SIGNAL_COOLDOWN_MINUTES = SIGNAL_COOLDOWN_HOURS * 60  # 60 min
 GROQ_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 
 # ─── Timeframes for Multi-TF Analysis ───────────────────────
-CRYPTO_TIMEFRAMES = ["15m", "1h", "4h", "1d"]
+CRYPTO_TIMEFRAMES = ["5m", "15m", "1h", "4h"]
 BIST_TIMEFRAMES = ["1h", "1d", "1wk"]
 
 # ─── BIST 100 Symbols ───────────────────────────────────────
@@ -298,4 +298,19 @@ ULTRA_CRYPTO_SYMBOLS = [
 # (scan_crypto.py uses ULTRA_CRYPTO_SYMBOLS when ULTRA_FILTER_ENABLED)
 
 # ─── Signal Flood Control (stricter in precision mode) ────────
-MAX_SIGNALS_PER_CRYPTO_RUN    = 3   # Max 3 per scan (quality > quantity)
+MAX_SIGNALS_PER_CRYPTO_RUN    = 5   # Max 5 per scan (scalp+swing combined)
+
+# ══════════════════════════════════════════════════════════════
+# SCALP MODE — Shorter Timeframe Signals (5m/15m primary)
+# Runs BEFORE swing scan on each symbol — more notifications
+# ══════════════════════════════════════════════════════════════
+SCALP_MODE_ENABLED            = True
+SCALP_CONFIDENCE_MIN          = 72        # Lower than swing (80)
+SCALP_CONSENSUS_REQUIRED      = 7         # Lower than swing (8)
+SCALP_ADX_MIN                 = 20        # Minimum trend strength for scalp
+SCALP_VOLUME_RATIO_MIN        = 1.3       # Lower than swing (1.5)
+SCALP_RR_MIN                  = 1.8       # Minimum R:R for scalp (swing: 2.5)
+
+# BTC trend now uses 1h data for faster/more responsive detection
+BTC_TREND_TIMEFRAME           = "1h"      # Changed from 4h to 1h
+BTC_TREND_CACHE_TTL           = 300       # 5 min cache (was 900/15 min)

@@ -13,6 +13,7 @@ logger = logging.getLogger("matrix_trader.analysis.multi_timeframe")
 
 # Timeframe weights — higher TF = more weight
 TF_WEIGHTS = {
+    "5m":  0.05,
     "15m": 0.10,
     "1h":  0.20,
     "4h":  0.30,
