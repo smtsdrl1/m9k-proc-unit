@@ -244,3 +244,58 @@ LIMIT_ORDER_TIMEOUT_MINUTES   = 15        # Bu süre içinde dolmazsa market fiy
 
 # ─── Multi-Exchange Price Aggregation ────────────────────────
 MULTI_EXCHANGE_AGGREGATION    = True      # Birden fazla borsadan median fiyat
+
+# ══════════════════════════════════════════════════════════════
+# PRECISION MODE — %95 Directional Accuracy Configuration
+# ══════════════════════════════════════════════════════════════
+
+# BIST is disabled — focus exclusively on crypto for maximum accuracy
+BIST_ENABLED = False
+
+# ─── Ultra-Strict Signal Gate ─────────────────────────────────
+ULTRA_FILTER_ENABLED          = True      # Enable all mandatory gates
+ULTRA_CONFIDENCE_MIN          = 80        # Only Grade A signals (was 45/55)
+ULTRA_ADX_MIN                 = 25        # Minimum trend strength
+ULTRA_VOLUME_RATIO_MIN        = 1.5       # Minimum volume confirmation
+ULTRA_MTF_ALIGNED_MIN         = 3         # Min timeframes aligned (of 4)
+ULTRA_RR_MIN                  = 2.5       # Minimum Risk:Reward ratio
+
+# ─── Consensus Engine ─────────────────────────────────────────
+CONSENSUS_ENGINE_ENABLED      = True
+CONSENSUS_REQUIRED            = 8         # Min FOR votes (of 12 systems)
+CONSENSUS_AGAINST_MAX         = 1         # Max AGAINST votes allowed
+
+# ─── BTC Trend Bias (Altcoin Filter) ─────────────────────────
+BTC_TREND_FILTER_ENABLED      = True
+BTC_TREND_STRICT_MODE         = True      # Block alts against strong BTC trend
+
+# ─── Top 20 Liquid Symbols (highest reliability for TA) ──────
+# Restricted from 100+ to 20 most liquid — noise reduction
+ULTRA_CRYPTO_SYMBOLS = [
+    "BTC/USDT",    # Market leader
+    "ETH/USDT",    # #2 — high liquidity, reliable TA
+    "BNB/USDT",    # Exchange token — strong volume
+    "SOL/USDT",    # High momentum coin
+    "XRP/USDT",    # Very high liquidity
+    "ADA/USDT",    # Stable alt
+    "AVAX/USDT",   # L1 leader
+    "DOT/USDT",    # Polkadot
+    "LINK/USDT",   # Oracle — strong trend behavior
+    "MATIC/USDT",  # Polygon — high volume
+    "UNI/USDT",    # DeFi leader
+    "ATOM/USDT",   # Cosmos
+    "LTC/USDT",    # Long history, reliable TA
+    "NEAR/USDT",   # L1 growing
+    "APT/USDT",    # New L1 with good volume
+    "ARB/USDT",    # L2 high volume
+    "OP/USDT",     # L2 Optimism
+    "INJ/USDT",    # High momentum
+    "SUI/USDT",    # New L1
+    "TON/USDT",    # Telegram coin — high volume
+]
+
+# Override CRYPTO_SYMBOLS when precision mode is active
+# (scan_crypto.py uses ULTRA_CRYPTO_SYMBOLS when ULTRA_FILTER_ENABLED)
+
+# ─── Signal Flood Control (stricter in precision mode) ────────
+MAX_SIGNALS_PER_CRYPTO_RUN    = 3   # Max 3 per scan (quality > quantity)

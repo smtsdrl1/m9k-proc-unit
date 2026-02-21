@@ -1,7 +1,12 @@
 """
-Crypto Scanner — GitHub Actions entry point.
-Scans all CRYPTO_SYMBOLS, detects signals, sends to Telegram.
-Run via: python -m scripts.scan_crypto
+Crypto Scanner — Precision Mode (Target: ~95% Directional Accuracy).
+
+Architecture: SNIPER — very few signals, each one near-certain.
+- Ultra-strict 10-gate mandatory filter (ALL must pass)
+- 12-system consensus engine (8+ FOR votes required)
+- BTC trend bias (altcoins follow BTC macro direction)
+- Restricted to Top 20 liquid symbols (less noise)
+- BIST disabled — crypto-only focus
 """
 import asyncio
 import logging
@@ -10,15 +15,16 @@ import os
 import traceback
 from datetime import datetime
 
-# Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.config import (
-    CRYPTO_SYMBOLS, CRYPTO_TIMEFRAMES, CAPITAL, RISK_PERCENT,
+    ULTRA_CRYPTO_SYMBOLS, CRYPTO_SYMBOLS, CRYPTO_TIMEFRAMES, CAPITAL, RISK_PERCENT,
     MIN_CONFIDENCE, SIGNAL_COOLDOWN_MINUTES,
     CIRCUIT_BREAKER_ENABLED, FUNDING_RATE_ENABLED,
     MAX_SIGNALS_PER_CRYPTO_RUN, SL_HIT_CONFIDENCE_BOOST, SL_HIT_LOOKBACK_HOURS,
     PAPER_TRADING_ENABLED, ORDERBOOK_ENABLED, ONCHAIN_FEED_ENABLED,
+    ULTRA_FILTER_ENABLED, ULTRA_CONFIDENCE_MIN,
+    CONSENSUS_ENGINE_ENABLED, BTC_TREND_FILTER_ENABLED, BTC_TREND_STRICT_MODE,
 )
 from src.data.crypto_feed import CryptoFeed
 from src.data.macro_feed import MacroFeed
@@ -33,6 +39,8 @@ from src.signals.scorer import calculate_confidence
 from src.signals.validator import validate_signal
 from src.signals.circuit_breaker import CircuitBreaker
 from src.signals.time_estimator import estimate_target_times
+from src.signals.ultra_filter import UltraFilter
+from src.signals.consensus_engine import ConsensusEngine
 from src.ai.groq_engine import GroqEngine
 from src.telegram.formatter import format_signal_message
 from src.telegram.sender import TelegramSender
@@ -40,6 +48,12 @@ from src.database.db import Database
 from src.utils.helpers import setup_logging
 
 logger = logging.getLogger("matrix_trader.scan_crypto")
+
+# Active symbol list — top 20 liquid in precision mode
+_ACTIVE_SYMBOLS = ULTRA_CRYPTO_SYMBOLS if ULTRA_FILTER_ENABLED else CRYPTO_SYMBOLS
+
+_ultra_filter   = UltraFilter()
+_consensus      = ConsensusEngine()
 
 
 async def scan_symbol(
@@ -53,12 +67,16 @@ async def scan_symbol(
     fear_greed: int = 50,
     min_confidence: int = None,
     onchain_data: dict = None,
+    btc_trend: dict = None,
 ) -> dict:
-    """Scan a single crypto symbol through the full pipeline."""
+    """Scan a single crypto symbol through the precision pipeline."""
     result = {"symbol": symbol, "signal": False, "error": None}
 
-    # Use adaptive threshold if provided, otherwise fall back to MIN_CONFIDENCE
-    effective_min_confidence = min_confidence if min_confidence is not None else MIN_CONFIDENCE
+    # In precision mode use ultra threshold; otherwise adaptive/default
+    if ULTRA_FILTER_ENABLED:
+        effective_min_confidence = ULTRA_CONFIDENCE_MIN
+    else:
+        effective_min_confidence = min_confidence if min_confidence is not None else MIN_CONFIDENCE
 
     try:
         # 0. Circuit breaker check — skip scanning if system is paused
@@ -222,6 +240,64 @@ async def scan_symbol(
         if confidence < effective_min_confidence:
             return result
 
+        # ── Precision Gate A: BTC Trend Alignment ────────────────
+        if BTC_TREND_FILTER_ENABLED and btc_trend:
+            from src.analysis.btc_trend import is_signal_aligned_with_btc
+            btc_ok, btc_reason = is_signal_aligned_with_btc(
+                symbol, signal["direction"], btc_trend,
+                strict=BTC_TREND_STRICT_MODE,
+            )
+            if not btc_ok:
+                logger.info(f"[{symbol}] BTC trend block: {btc_reason}")
+                result["error"] = "btc_trend_block"
+                return result
+
+        # ── Precision Gate B: Ultra-Strict Mandatory Filter ───────
+        if ULTRA_FILTER_ENABLED:
+            uf_result = _ultra_filter.check(
+                indicators=indicators,
+                signal_direction=signal["direction"],
+                risk_mgmt=risk_mgmt,
+                mtf_result=mtf_result,
+                sm_result=sm_result,
+                funding_rate=funding_rate,
+                confidence=confidence,
+                ob_data=ob_data,
+            )
+            if not uf_result["passes"]:
+                logger.info(_ultra_filter.format_rejection_log(
+                    uf_result, symbol, signal["direction"]
+                ))
+                result["error"] = "ultra_filter"
+                return result
+            logger.debug(
+                f"[{symbol}] UltraFilter PASS "
+                f"({uf_result['gates_passed']}/{uf_result['gates_total']}) "
+                f"entry={uf_result['entry_quality']}"
+            )
+
+        # ── Precision Gate C: 12-System Consensus Engine ──────────
+        if CONSENSUS_ENGINE_ENABLED:
+            cv_result = _consensus.vote(
+                indicators=indicators,
+                direction=signal["direction"],
+                mtf_result=mtf_result,
+                sm_result=sm_result,
+                funding_rate=funding_rate,
+                fear_greed=fear_greed,
+                order_book=ob_data,
+                df=primary_df,
+            )
+            if not cv_result["passes"]:
+                logger.info(
+                    f"[{symbol}] Consensus FAIL: "
+                    f"{cv_result['net_for']}✅ {cv_result['net_against']}❌ "
+                    f"({cv_result['agreement_pct']:.0f}%) — need "
+                    f"8✅ max 1❌ | contra={cv_result['contra_signals']}"
+                )
+                result["error"] = "consensus_fail"
+                return result
+
         # 10.5. SL hit recently? Raise confidence bar for re-entry.
         if db.was_sl_hit_recently(symbol, SL_HIT_LOOKBACK_HOURS):
             required = effective_min_confidence + SL_HIT_CONFIDENCE_BOOST
@@ -306,6 +382,14 @@ async def scan_symbol(
             time_estimates=time_estimates,
         )
 
+        # 13.5 Append consensus info to message (precision mode)
+        if CONSENSUS_ENGINE_ENABLED and "cv_result" in dir():
+            try:
+                consensus_line = _consensus.format_consensus_line(cv_result)
+                message += f"\n{consensus_line}"
+            except Exception:
+                pass
+
         # 14. Send to Telegram (text only — no chart photos)
         sent = await sender.send_message(message)
 
@@ -379,11 +463,12 @@ async def scan_symbol(
 
 
 async def main():
-    """Main scanner loop."""
+    """Main scanner loop — Precision Mode."""
     setup_logging()
     logger.info("=" * 60)
-    logger.info("🚀 Matrix Trader AI — Crypto Scanner Starting")
-    logger.info(f"   Scanning {len(CRYPTO_SYMBOLS)} symbols")
+    logger.info("🎯 Matrix Trader AI — Precision Crypto Scanner")
+    logger.info(f"   Symbols: {len(_ACTIVE_SYMBOLS)} (top-20 liquid)")
+    logger.info(f"   Mode: {'ULTRA PRECISION' if ULTRA_FILTER_ENABLED else 'STANDARD'}")
     logger.info("=" * 60)
 
     feed = CryptoFeed()
@@ -423,20 +508,36 @@ async def main():
             except Exception as e:
                 logger.warning(f"OnChain fetch error: {e}")
 
-        # Adaptive confidence threshold based on recent performance
-        from src.signals.adaptive_threshold import get_adaptive_threshold
-        adaptive_threshold = get_adaptive_threshold(db, is_crypto=True)
-        if adaptive_threshold != MIN_CONFIDENCE:
-            logger.info(f"Adaptive threshold: {MIN_CONFIDENCE} → {adaptive_threshold}")
+        # Pre-fetch BTC trend for altcoin bias filter
+        btc_trend_data = None
+        if BTC_TREND_FILTER_ENABLED:
+            try:
+                from src.analysis.btc_trend import get_btc_trend
+                btc_trend_data = get_btc_trend(feed)
+                logger.info(f"BTC Trend: {btc_trend_data['description']}")
+            except Exception as e:
+                logger.warning(f"BTC trend fetch error: {e}")
 
-        # Scan each symbol
-        for i, symbol in enumerate(CRYPTO_SYMBOLS):
+        # Adaptive confidence threshold (only used when ultra filter is OFF)
+        adaptive_threshold = MIN_CONFIDENCE
+        if not ULTRA_FILTER_ENABLED:
+            try:
+                from src.signals.adaptive_threshold import get_adaptive_threshold
+                adaptive_threshold = get_adaptive_threshold(db, is_crypto=True)
+                if adaptive_threshold != MIN_CONFIDENCE:
+                    logger.info(f"Adaptive threshold: {MIN_CONFIDENCE} → {adaptive_threshold}")
+            except Exception:
+                pass
+
+        # Scan each symbol (top-20 liquid in precision mode)
+        for i, symbol in enumerate(_ACTIVE_SYMBOLS):
             try:
                 result = await scan_symbol(
                     symbol, feed, groq, sender, db, macro_result, circuit_breaker,
                     fear_greed=fear_greed_val,
                     min_confidence=adaptive_threshold,
                     onchain_data=onchain_global,
+                    btc_trend=btc_trend_data,
                 )
             except Exception as e:
                 result = {"signal": False, "error": str(e)}
@@ -471,10 +572,12 @@ async def main():
 
     # Send summary if signals found
     if signals_found > 0:
+        mode_tag = "🎯 PRECISION" if ULTRA_FILTER_ENABLED else "📊 STANDARD"
         await sender.send_message(
-            f"📊 <b>Kripto Tarama Tamamlandı</b>\n\n"
-            f"Taranan: {len(CRYPTO_SYMBOLS)} sembol\n"
+            f"{mode_tag} <b>Kripto Tarama Tamamlandı</b>\n\n"
+            f"Taranan: {len(_ACTIVE_SYMBOLS)} sembol\n"
             f"Sinyal: {signals_found}\n"
+            f"BTC Trend: {btc_trend_data.get('trend','?') if btc_trend_data else 'N/A'}\n"
             f"Hata: {errors}"
         )
 
