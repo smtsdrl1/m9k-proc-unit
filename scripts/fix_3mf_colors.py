@@ -187,36 +187,43 @@ def assign_colors_geometric(
         color_ids[y_norm <= 0.35] = 2  # alt
 
     else:  # 4 renk — ana kullanım durumu
-        # Özellik vektörü: normalize y + normal_z ağırlıklı + konumsal spread
+        # Özellik vektörü: mesh'e özgü, yüklenen dosyaya göre ölçeklenir
+        cx_norm = centroids[:, 0] / (abs(centroids[:, 0]).max() + 1e-8)
         features = np.column_stack([
-            y_norm * 2.0,           # dikey konum (ağırlıklı)
-            nz * 0.8,               # öne bakış
-            normals[:, 0] * 0.4,    # yan bakış
-            centroids[:, 0] / (abs(centroids[:, 0]).max() + 1e-8) * 0.3,  # sol/sağ
+            y_norm * 2.0,    # dikey konum (ağırlıklı)
+            nz    * 0.8,     # öne bakış (kafatası yüzü ayrımı)
+            normals[:, 0] * 0.4,   # yan bakış
+            cx_norm * 0.3,         # sol/sağ simetri
         ])
 
-        # İlk geçiş: yükseklik tabanlı 4 bölge belirle
+        # Kural tabanlı ön atama (geniş, net bölgeler)
+        mask_hat  = y_norm > 0.80
+        mask_face = (y_norm > 0.55) & (y_norm <= 0.80) & (nz > 0.2)
+        mask_body = (y_norm > 0.30) & ~(mask_hat | mask_face)
+        mask_legs = y_norm <= 0.30
+
         color_ids = np.zeros(len(tris), dtype=np.uint8)
+        color_ids[mask_hat]  = 1
+        color_ids[mask_face] = 0
+        color_ids[mask_body] = 2
+        color_ids[mask_legs] = 3
 
-        # Kural tabanlı ön atama
-        mask_hat   = y_norm > 0.80                          # bere / kask
-        mask_face  = (y_norm > 0.55) & (y_norm <= 0.80) & (nz > 0.2)  # yüz
-        mask_body  = (y_norm > 0.30) & ~(mask_hat | mask_face)         # gövde
-        mask_legs  = y_norm <= 0.30                         # alt
-
-        color_ids[mask_hat]  = 1   # filament 2
-        color_ids[mask_face] = 0   # filament 1
-        color_ids[mask_body] = 2   # filament 3
-        color_ids[mask_legs] = 3   # filament 4
-
-        # K-Means ile belirsiz bölgeleri iyileştir (kural atanamadı = çakışıyor)
-        # Sadece küçük parçalı bölgeleri yeniden kümelele
-        ambiguous = (~mask_hat) & (~mask_face) & (~mask_body) & (~mask_legs)
-        if ambiguous.sum() > 10:
+        # K-Means ile SINIR bölgelerini iyileştir.
+        # Sabit eşikler (%80, %55, %30) her modelin şekline tam uymaz;
+        # ±%07 bandındaki "geçiş yüzleri" makine öğrenimiyle yeniden atanır.
+        BAND = 0.07
+        boundary = (
+            (np.abs(y_norm - 0.80) < BAND) |
+            (np.abs(y_norm - 0.55) < BAND) |
+            (np.abs(y_norm - 0.30) < BAND)
+        )
+        n_boundary = boundary.sum()
+        if n_boundary > 20:
             km = KMeans(n_clusters=4, random_state=42, n_init=5)
-            km.fit(features[~ambiguous])
-            # Ambiguous olanları en yakın merkeze ata
-            color_ids[ambiguous] = km.predict(features[ambiguous]).astype(np.uint8)
+            km.fit(features[~boundary])            # merkezi sabit yüzlerle eğit
+            color_ids[boundary] = km.predict(features[boundary]).astype(np.uint8)
+            if debug:
+                print(f"  K-Means geçiş bandı: {n_boundary:,} yüz yeniden atandı")
 
     if debug:
         for c in range(n_colors):
@@ -305,11 +312,12 @@ def write_bambu_model_settings(
 
 # ─── Ana işlev ────────────────────────────────────────────────────────────────
 def fix_3mf_colors(
-    input_path:  str,
-    output_path: str,
-    n_colors:    int  = 4,
-    min_island:  int  = 200,
-    debug:       bool = False,
+    input_path:   str,
+    output_path:  str,
+    n_colors:     int   = 4,
+    min_island:   int   = 0,    # 0 = otomatik (toplam yüzün %1'i)
+    island_pct:   float = 1.0,  # min_island=0 iken kullanılan yüzde
+    debug:        bool  = False,
 ) -> None:
     print(f"[+] Yükleniyor: {input_path}")
 
@@ -317,14 +325,20 @@ def fix_3mf_colors(
         verts, tris, xml_bytes, model_path = load_mesh_from_3mf(zf)
         all_names = zf.namelist()
 
-    print(f"    Vertex: {len(verts):,}  |  Üçgen: {len(tris):,}")
+    n_faces = len(tris)
+    print(f"    Vertex: {len(verts):,}  |  Üçgen: {n_faces:,}")
+
+    # min_island otomatik hesapla: meshın boyutuna oranla
+    if min_island == 0:
+        min_island = max(50, int(n_faces * island_pct / 100))
+    print(f"    min_island = {min_island:,} yüz  ({min_island/n_faces*100:.2f}% of mesh)")
 
     # Renk ata
     print(f"[+] {n_colors} renk için geometrik analiz yapılıyor...")
     color_ids = assign_colors_geometric(verts, tris, n_colors=n_colors, debug=debug)
 
     # Küçük adacıkları birleştir
-    print(f"[+] Küçük parçalar birleştiriliyor (< {min_island} yüz)...")
+    print(f"[+] Küçük parçalar birleştiriliyor (< {min_island:,} yüz)...")
     color_ids = merge_small_islands(tris, color_ids, min_faces=min_island)
 
     if debug:
@@ -376,8 +390,10 @@ def main():
     parser.add_argument("-n", "--colors", type=int, default=4,
                         choices=[2, 3, 4],
                         help="Filament sayısı (varsayılan: 4)")
-    parser.add_argument("--min-island", type=int, default=200,
-                        help="Bu değerden az yüzlü adacıkları birleştir (varsayılan: 200)")
+    parser.add_argument("--min-island", type=int, default=0,
+                        help="Adacık eşiği (yüz sayısı). 0=otomatik: mesh boyutunun %%1'i (varsayılan: 0)")
+    parser.add_argument("--island-pct", type=float, default=1.0,
+                        help="--min-island=0 iken kullanılan yüzde (varsayılan: 1.0)")
     parser.add_argument("--debug", action="store_true",
                         help="Bölge istatistiklerini yazdır")
     args = parser.parse_args()
@@ -395,6 +411,7 @@ def main():
         output_path = args.output,
         n_colors    = args.colors,
         min_island  = args.min_island,
+        island_pct  = args.island_pct,
         debug       = args.debug,
     )
 
