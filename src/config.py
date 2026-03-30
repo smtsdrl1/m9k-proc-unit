@@ -32,7 +32,7 @@ SIGNAL_COOLDOWN_MINUTES = SIGNAL_COOLDOWN_HOURS * 60  # 60 min
 GROQ_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 
 # ─── Timeframes for Multi-TF Analysis ───────────────────────
-CRYPTO_TIMEFRAMES = ["15m", "1h", "4h", "1d"]
+CRYPTO_TIMEFRAMES = ["5m", "15m", "1h", "4h"]
 BIST_TIMEFRAMES = ["1h", "1d", "1wk"]
 
 # ─── BIST 100 Symbols ───────────────────────────────────────
@@ -201,3 +201,116 @@ MAX_SIGNALS_PER_BIST_RUN   = 3   # BIST: max 3 sinyal / tarama
 # (MIN_CONFIDENCE + SL_HIT_CONFIDENCE_BOOST >= erişim eşiği)
 SL_HIT_CONFIDENCE_BOOST    = 10  # +10 puan gereksinimi
 SL_HIT_LOOKBACK_HOURS      = 24  # Bu süre içinde SL yendiği varsa boost uygulanır
+
+# ─── Paper Trading (Demo Simülasyon) ────────────────────────
+PAPER_TRADING_ENABLED         = True
+PAPER_TRADING_CAPITAL         = 10000.0   # Başlangıç demo bakiyesi ($)
+PAPER_TRADE_MAX_SLIPPAGE_PCT  = 1.0       # İzin verilen max kayma (%)
+
+# ─── Adaptive Confidence Thresholds ─────────────────────────
+ADAPTIVE_THRESHOLD_ENABLED    = True
+ADAPTIVE_THRESHOLD_HIGH_WR    = 65        # Win rate > 65% → eşiği 5 düşür
+ADAPTIVE_THRESHOLD_LOW_WR     = 40        # Win rate < 40% → eşiği 10 arttır
+ADAPTIVE_THRESHOLD_RELAX      = 5
+ADAPTIVE_THRESHOLD_TIGHTEN    = 10
+
+# ─── Drawdown Recovery Guard ─────────────────────────────────
+DRAWDOWN_CAUTION_PCT          = 10.0      # %10 DD → CAUTION
+DRAWDOWN_DEFENSIVE_PCT        = 20.0      # %20 DD → DEFENSIVE
+DRAWDOWN_HALT_PCT             = 30.0      # %30 DD → HALT
+
+# ─── Order Book Imbalance ─────────────────────────────────────
+ORDERBOOK_ENABLED             = True
+ORDERBOOK_DEPTH               = 20        # Analiz edilecek seviye sayısı
+ORDERBOOK_IMBALANCE_THRESHOLD = 2.0       # bid/ask oranı üstü = güçlü imbalance
+ORDERBOOK_MAX_BOOST           = 8         # Max confidence boost
+
+# ─── On-Chain Data (CoinGecko free) ──────────────────────────
+ONCHAIN_FEED_ENABLED          = True
+BTC_DOMINANCE_HIGH_THRESHOLD  = 62.0      # BTC.D > 62% = alt coinler için caution
+BTC_DOMINANCE_LOW_THRESHOLD   = 40.0      # BTC.D < 40% = alt coinler için boost
+
+# ─── Post-Trade AI Journal ────────────────────────────────────
+JOURNAL_ENABLED               = True
+
+# ─── KAP Calendar (BIST) ──────────────────────────────────────
+KAP_FILTER_ENABLED            = True
+KAP_BLACKOUT_MINUTES          = 30        # Açıklama öncesi/sonrası blok süresi
+
+# ─── Limit Order Simulation ──────────────────────────────────
+LIMIT_ORDER_SIMULATION        = False     # Açık: limit emir simülasyonu (15dk bekleme)
+LIMIT_ORDER_PULLBACK_PCT      = 0.3       # Sinyal fiyatından %0.3 geri çekilme bekle
+LIMIT_ORDER_TIMEOUT_MINUTES   = 15        # Bu süre içinde dolmazsa market fiyatından gir
+
+# ─── Multi-Exchange Price Aggregation ────────────────────────
+MULTI_EXCHANGE_AGGREGATION    = True      # Birden fazla borsadan median fiyat
+
+# ══════════════════════════════════════════════════════════════
+# PRECISION MODE — %95 Directional Accuracy Configuration
+# ══════════════════════════════════════════════════════════════
+
+# BIST is disabled — focus exclusively on crypto for maximum accuracy
+BIST_ENABLED = False
+
+# ─── Ultra-Strict Signal Gate ─────────────────────────────────
+ULTRA_FILTER_ENABLED          = True      # Enable all mandatory gates
+ULTRA_CONFIDENCE_MIN          = 80        # Only Grade A signals (was 45/55)
+ULTRA_ADX_MIN                 = 25        # Minimum trend strength
+ULTRA_VOLUME_RATIO_MIN        = 1.5       # Minimum volume confirmation
+ULTRA_MTF_ALIGNED_MIN         = 3         # Min timeframes aligned (of 4)
+ULTRA_RR_MIN                  = 2.5       # Minimum Risk:Reward ratio
+
+# ─── Consensus Engine ─────────────────────────────────────────
+CONSENSUS_ENGINE_ENABLED      = True
+CONSENSUS_REQUIRED            = 8         # Min FOR votes (of 12 systems)
+CONSENSUS_AGAINST_MAX         = 1         # Max AGAINST votes allowed
+
+# ─── BTC Trend Bias (Altcoin Filter) ─────────────────────────
+BTC_TREND_FILTER_ENABLED      = True
+BTC_TREND_STRICT_MODE         = True      # Block alts against strong BTC trend
+
+# ─── Top 20 Liquid Symbols (highest reliability for TA) ──────
+# Restricted from 100+ to 20 most liquid — noise reduction
+ULTRA_CRYPTO_SYMBOLS = [
+    "BTC/USDT",    # Market leader
+    "ETH/USDT",    # #2 — high liquidity, reliable TA
+    "BNB/USDT",    # Exchange token — strong volume
+    "SOL/USDT",    # High momentum coin
+    "XRP/USDT",    # Very high liquidity
+    "ADA/USDT",    # Stable alt
+    "AVAX/USDT",   # L1 leader
+    "DOT/USDT",    # Polkadot
+    "LINK/USDT",   # Oracle — strong trend behavior
+    "MATIC/USDT",  # Polygon — high volume
+    "UNI/USDT",    # DeFi leader
+    "ATOM/USDT",   # Cosmos
+    "LTC/USDT",    # Long history, reliable TA
+    "NEAR/USDT",   # L1 growing
+    "APT/USDT",    # New L1 with good volume
+    "ARB/USDT",    # L2 high volume
+    "OP/USDT",     # L2 Optimism
+    "INJ/USDT",    # High momentum
+    "SUI/USDT",    # New L1
+    "TON/USDT",    # Telegram coin — high volume
+]
+
+# Override CRYPTO_SYMBOLS when precision mode is active
+# (scan_crypto.py uses ULTRA_CRYPTO_SYMBOLS when ULTRA_FILTER_ENABLED)
+
+# ─── Signal Flood Control (stricter in precision mode) ────────
+MAX_SIGNALS_PER_CRYPTO_RUN    = 5   # Max 5 per scan (scalp+swing combined)
+
+# ══════════════════════════════════════════════════════════════
+# SCALP MODE — Shorter Timeframe Signals (5m/15m primary)
+# Runs BEFORE swing scan on each symbol — more notifications
+# ══════════════════════════════════════════════════════════════
+SCALP_MODE_ENABLED            = True
+SCALP_CONFIDENCE_MIN          = 72        # Lower than swing (80)
+SCALP_CONSENSUS_REQUIRED      = 7         # Lower than swing (8)
+SCALP_ADX_MIN                 = 20        # Minimum trend strength for scalp
+SCALP_VOLUME_RATIO_MIN        = 1.3       # Lower than swing (1.5)
+SCALP_RR_MIN                  = 1.8       # Minimum R:R for scalp (swing: 2.5)
+
+# BTC trend now uses 1h data for faster/more responsive detection
+BTC_TREND_TIMEFRAME           = "1h"      # Changed from 4h to 1h
+BTC_TREND_CACHE_TTL           = 300       # 5 min cache (was 900/15 min)

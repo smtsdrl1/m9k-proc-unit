@@ -36,8 +36,10 @@ def calculate_confidence(
     fear_greed: int = 50,
     is_crypto: bool = True,
     funding_rate: dict = None,
-    df=None,           # pd.DataFrame for advanced analysis (CVD, MS, OB, Sweep, VPVR)
-    symbol: str = "",  # for regime cache
+    df=None,             # pd.DataFrame for advanced analysis (CVD, MS, OB, Sweep, VPVR)
+    symbol: str = "",    # for regime cache
+    order_book: dict = None,   # from CryptoFeed.fetch_order_book()
+    onchain: dict = None,      # from onchain_feed.get_onchain_confidence_boost()
 ) -> dict:
     """
     Calculate comprehensive confidence score.
@@ -81,6 +83,36 @@ def calculate_confidence(
 
     total = sum(breakdown.values())
     total = max(0, min(100, total))
+
+    # ─── Order Book Imbalance (Crypto Only) ─────────────
+    if is_crypto and order_book:
+        try:
+            from src.analysis.orderbook import analyze_order_book
+            ob_result = analyze_order_book(order_book, direction)
+            ob_boost = ob_result.get("confidence_boost", 0)
+            if ob_boost != 0:
+                total = max(0, min(100, total + ob_boost))
+                breakdown["order_book"] = ob_boost
+                logger.debug(
+                    f"OrderBook boost: {ob_boost:+d} "
+                    f"({ob_result.get('description', '')})"
+                )
+        except Exception as e:
+            logger.debug(f"OrderBook analysis skipped: {e}")
+
+    # ─── On-Chain Data Boost ─────────────────────────────
+    if is_crypto and onchain:
+        try:
+            onchain_boost = onchain.get("boost", 0)
+            if onchain_boost != 0:
+                total = max(0, min(100, total + onchain_boost))
+                breakdown["onchain"] = onchain_boost
+                logger.debug(
+                    f"OnChain boost: {onchain_boost:+d} "
+                    f"({onchain.get('reason', '')})"
+                )
+        except Exception as e:
+            logger.debug(f"OnChain boost skipped: {e}")
 
     # ─── Funding Rate Adjustment (Crypto Only) ──────────
     funding_adjustment = 0
@@ -466,19 +498,21 @@ def _score_funding_rate(funding: dict, direction: str) -> int:
             return -15       # Strong penalty for long
         elif rate > 0.01:   # High positive
             return -8
+        # Fix: check < -0.05 BEFORE < -0.01, otherwise < -0.05 is never reached
+        elif rate < -0.05:  # Very negative = shorts overcrowded → strong buy signal
+            return 10
         elif rate < -0.01:  # Negative = shorts paying, bullish for longs
             return 8
-        elif rate < -0.05:  # Very negative = shorts overcrowded
-            return 10
     else:  # SELL / SHORT
         if rate < -0.05:    # Very negative = shorts overcrowded
             return -15
         elif rate < -0.01:
             return -8
+        # Fix: check > 0.05 BEFORE > 0.01, otherwise > 0.05 is never reached
+        elif rate > 0.05:   # Very high positive = longs overcrowded → strong sell signal
+            return 10
         elif rate > 0.01:   # Positive = longs paying, good for shorts
             return 8
-        elif rate > 0.05:
-            return 10
 
     return 0
 

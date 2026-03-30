@@ -98,15 +98,16 @@ def analyze_macro(macro_data: dict, fear_greed: dict = None, is_bist: bool = Fal
     if vix:
         val = vix.get("value", 20)
         change = vix.get("change_pct", 0)
-        if val > 30 or change > 10:
+        # Fix: check >40 (panic) BEFORE >30 (high), otherwise >40 is never reached
+        if val > 40:
+            result["crypto_filter"] = "BLOCK"
+            result["bist_filter"] = "BLOCK"
+            warnings.append(f"VIX çok yüksek ({val:.1f}) — PANIK modu, işlem AÇMA")
+        elif val > 30 or change > 10:
             # High fear = risk-off
             result["crypto_filter"] = "CAUTION" if result["crypto_filter"] == "ALLOW" else result["crypto_filter"]
             result["bist_filter"] = "CAUTION"
             warnings.append(f"VIX yüksek ({val:.1f}) — Risk-off ortam, dikkatli ol")
-        elif val > 40:
-            result["crypto_filter"] = "BLOCK"
-            result["bist_filter"] = "BLOCK"
-            warnings.append(f"VIX çok yüksek ({val:.1f}) — PANIK modu, işlem AÇMA")
 
         result["details"]["vix"] = {
             "value": val,

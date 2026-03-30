@@ -122,6 +122,7 @@ class SignalTracker:
                         "signal_id": signal_id,
                         "symbol": symbol,
                         "direction": direction,
+                        "is_crypto": is_crypto,
                         "entry_price": entry,
                         "exit_price": current_price,
                         "sl_price": effective_sl,
@@ -136,6 +137,7 @@ class SignalTracker:
                         "signal_id": signal_id,
                         "symbol": symbol,
                         "direction": direction,
+                        "is_crypto": is_crypto,
                         "entry_price": entry,
                         "exit_price": current_price,
                         "sl_price": effective_sl,
@@ -165,6 +167,7 @@ class SignalTracker:
                         "signal_id": signal_id,
                         "symbol": symbol,
                         "direction": direction,
+                        "is_crypto": is_crypto,
                         "entry_price": entry,
                         "target_price": target_price,
                         "current_price": current_price,
@@ -274,15 +277,17 @@ class SignalTracker:
         event_type = event["type"]
         symbol = event["symbol"]
         direction = event.get("direction", "")
+        # Crypto symbols contain "/"; BIST symbols are plain tickers
+        currency = "$" if event.get("is_crypto", "/" in symbol) else "₺"
 
         if event_type == "SL_HIT":
             return (
                 f"🔴 STOP-LOSS\n"
                 f"━━━━━━━━━━━━━━━━━━\n"
                 f"📊 {symbol} ({direction})\n"
-                f"💰 Giriş: ${event['entry_price']:.4f}\n"
-                f"🛑 SL: ${event['sl_price']:.4f}\n"
-                f"📉 Çıkış: ${event['exit_price']:.4f}\n"
+                f"💰 Giriş: {currency}{event['entry_price']:.4f}\n"
+                f"🛑 SL: {currency}{event['sl_price']:.4f}\n"
+                f"📉 Çıkış: {currency}{event['exit_price']:.4f}\n"
                 f"❌ PnL: {event['pnl_pct']:+.2f}%\n"
                 f"━━━━━━━━━━━━━━━━━━"
             )
@@ -292,9 +297,9 @@ class SignalTracker:
                 f"🔒 TRAILING STOP\n"
                 f"━━━━━━━━━━━━━━━━━━\n"
                 f"📊 {symbol} ({direction})\n"
-                f"💰 Giriş: ${event['entry_price']:.4f}\n"
-                f"🔒 Trailing SL: ${event['sl_price']:.4f}\n"
-                f"📈 Çıkış: ${event['exit_price']:.4f}\n"
+                f"💰 Giriş: {currency}{event['entry_price']:.4f}\n"
+                f"🔒 Trailing SL: {currency}{event['sl_price']:.4f}\n"
+                f"📈 Çıkış: {currency}{event['exit_price']:.4f}\n"
                 f"🎯 Hedefler: {targets_hit}/3 vuruldu\n"
                 f"{'✅' if event['pnl_pct'] > 0 else '❌'} PnL: {event['pnl_pct']:+.2f}%\n"
                 f"━━━━━━━━━━━━━━━━━━"
@@ -306,9 +311,9 @@ class SignalTracker:
                 f"🎯 HEDEF {t_num} ✅ {stars}\n"
                 f"━━━━━━━━━━━━━━━━━━\n"
                 f"📊 {symbol} ({direction})\n"
-                f"💰 Giriş: ${event['entry_price']:.4f}\n"
-                f"🎯 Hedef {t_num}: ${event['target_price']:.4f}\n"
-                f"📈 Şu an: ${event['current_price']:.4f}\n"
+                f"💰 Giriş: {currency}{event['entry_price']:.4f}\n"
+                f"🎯 Hedef {t_num}: {currency}{event['target_price']:.4f}\n"
+                f"📈 Şu an: {currency}{event['current_price']:.4f}\n"
                 f"✅ PnL: {event['pnl_pct']:+.2f}%\n"
                 f"⏱ Süre: {event.get('duration_str', 'N/A')}\n"
             )
