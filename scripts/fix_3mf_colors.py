@@ -220,10 +220,28 @@ def assign_colors_geometric(
         n_boundary = boundary.sum()
         if n_boundary > 20:
             km = KMeans(n_clusters=4, random_state=42, n_init=5)
-            km.fit(features[~boundary])            # merkezi sabit yüzlerle eğit
-            color_ids[boundary] = km.predict(features[boundary]).astype(np.uint8)
+            non_boundary_features = features[~boundary]
+            km.fit(non_boundary_features)
+
+            # KMeans cluster label'ları (0-3) rule-based color_id'lerle eşleşmeyebilir.
+            # Her cluster için dominant rule-based rengi bul ve eşleme tablosu oluştur.
+            non_boundary_cluster_labels = km.predict(non_boundary_features)
+            non_boundary_colors = color_ids[~boundary]
+            label_map = np.zeros(4, dtype=np.uint8)
+            for cluster in range(4):
+                mask = non_boundary_cluster_labels == cluster
+                if mask.any():
+                    label_map[cluster] = np.bincount(
+                        non_boundary_colors[mask].astype(np.int64), minlength=4
+                    ).argmax()
+                else:
+                    label_map[cluster] = cluster
+
+            boundary_clusters = km.predict(features[boundary])
+            color_ids[boundary] = label_map[boundary_clusters]
             if debug:
                 print(f"  K-Means geçiş bandı: {n_boundary:,} yüz yeniden atandı")
+                print(f"  K-Means label eşleme: {dict(enumerate(label_map.tolist()))}")
 
     if debug:
         for c in range(n_colors):
@@ -242,6 +260,11 @@ def merge_small_islands(
     """
     Aynı renkteki bağlantısız küçük adacıkları (< min_faces yüz) komşu
     rengine atar — bu sayede binlerce küçük parça birleşir.
+
+    Tek geçişli BFS yerine çok geçişli yaklaşım kullanılır: her geçişte
+    küçük adacıklar komşularına atanır ve sonuç stabilleşene kadar tekrar
+    edilir. Bu, merge sonrası oluşan "ziyaret edilmiş yüz" köprü sorununu
+    önler.
     """
     n_faces = len(tris)
 
@@ -252,44 +275,53 @@ def merge_small_islands(
             e = tuple(sorted([tri[i], tri[(i+1)%3]]))
             edge_to_faces[e].append(fi)
 
-    adj = defaultdict(set)
+    adj = [[] for _ in range(n_faces)]
     for faces in edge_to_faces.values():
         if len(faces) == 2:
-            adj[faces[0]].add(faces[1])
-            adj[faces[1]].add(faces[0])
+            adj[faces[0]].append(faces[1])
+            adj[faces[1]].append(faces[0])
 
-    # Aynı renkteki bağlantılı bileşenleri bul (BFS)
-    visited   = np.zeros(n_faces, dtype=bool)
-    new_color = color_ids.copy()
+    current_color = color_ids.copy()
 
-    for start in range(n_faces):
-        if visited[start]:
-            continue
-        cid = color_ids[start]
-        component = []
-        queue = [start]
-        visited[start] = True
-        while queue:
-            fi = queue.pop()
-            component.append(fi)
-            for nb in adj[fi]:
-                if not visited[nb] and color_ids[nb] == cid:
-                    visited[nb] = True
-                    queue.append(nb)
+    # Stabiliazasyon döngüsü: değişiklik kalmayana kadar tekrarla
+    for _ in range(10):  # maksimum 10 geçiş yeterli
+        visited   = np.zeros(n_faces, dtype=bool)
+        new_color = current_color.copy()
+        changed   = False
 
-        if len(component) < min_faces:
-            # Komşu renkleri say ve en yaygın olana ata
-            neighbor_colors = []
-            for fi in component:
+        for start in range(n_faces):
+            if visited[start]:
+                continue
+            cid = current_color[start]
+            component = []
+            queue = [start]
+            visited[start] = True
+            while queue:
+                fi = queue.pop()
+                component.append(fi)
                 for nb in adj[fi]:
-                    if color_ids[nb] != cid:
-                        neighbor_colors.append(color_ids[nb])
-            if neighbor_colors:
-                dominant = max(set(neighbor_colors), key=neighbor_colors.count)
-                for fi in component:
-                    new_color[fi] = dominant
+                    if not visited[nb] and current_color[nb] == cid:
+                        visited[nb] = True
+                        queue.append(nb)
 
-    return new_color
+            if len(component) < min_faces:
+                # Komşu renkleri say ve en yaygın olana ata
+                neighbor_colors = []
+                for fi in component:
+                    for nb in adj[fi]:
+                        if current_color[nb] != cid:
+                            neighbor_colors.append(current_color[nb])
+                if neighbor_colors:
+                    dominant = max(set(neighbor_colors), key=neighbor_colors.count)
+                    for fi in component:
+                        new_color[fi] = dominant
+                    changed = True
+
+        current_color = new_color
+        if not changed:
+            break
+
+    return current_color
 
 
 # ─── Bambu config yazma ───────────────────────────────────────────────────────
