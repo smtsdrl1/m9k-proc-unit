@@ -2,171 +2,532 @@
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+
+<!-- ================================================================
+     iOS / PWA FULL-SCREEN META TAGS
+     ================================================================ -->
+<!-- Viewport: no scaling, fill device, respect notch safe areas -->
+<meta name="viewport" content="width=device-width, initial-scale=1.0,
+      viewport-fit=cover, user-scalable=no, maximum-scale=1.0">
+
+<!-- iOS: hides Safari chrome when launched from Home Screen -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<!-- black-translucent → our bg bleeds behind status bar on iOS -->
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Ice Tower">
+
+<!-- Android / Chrome PWA -->
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0a0a2e">
+<meta name="application-name" content="Ice Tower">
+
+<!-- Disable phone number detection, tap highlight, etc. -->
+<meta name="format-detection" content="telephone=no">
+
+<!-- Manifest + apple-touch-icon injected as blob URLs in JS below -->
+<link rel="manifest" id="pwa-manifest">
+<link rel="apple-touch-icon" id="apple-touch-icon">
+
 <title>Ice Tower</title>
 <style>
-  * { margin: 0; padding: 0; box-sizing: border-box; touch-action: none; }
-  body {
-    background: #0a0a2e;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    height: 100vh;
-    overflow: hidden;
-    font-family: 'Courier New', monospace;
-  }
-  #ui {
-    position: fixed;
-    top: 0; left: 0; right: 0;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 8px 16px;
-    background: rgba(0,0,30,0.85);
-    z-index: 10;
-    color: #7ff;
-    font-size: 15px;
-    font-weight: bold;
-  }
-  #canvas {
-    display: block;
-    background: #08082a;
-  }
-  #overlay {
-    position: fixed;
-    inset: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    background: rgba(0,0,30,0.93);
-    z-index: 20;
-    color: #fff;
-    text-align: center;
-    gap: 18px;
-  }
-  #overlay h1 {
-    font-size: 2.8em;
-    color: #7ff;
-    text-shadow: 0 0 20px #0ff, 0 0 40px #07f;
-    letter-spacing: 4px;
-  }
-  #overlay p { font-size: 1em; color: #adf; max-width: 280px; line-height: 1.6; }
-  #overlay .score-display { font-size: 1.5em; color: #ff7; }
-  #startBtn {
-    margin-top: 10px;
-    padding: 16px 48px;
-    background: linear-gradient(135deg, #0af, #07f);
-    color: #fff;
-    font-size: 1.3em;
-    font-weight: bold;
-    border: none;
-    border-radius: 50px;
-    cursor: pointer;
-    letter-spacing: 2px;
-    box-shadow: 0 0 24px #0af;
-  }
-  #startBtn:active { transform: scale(0.96); }
-  #controls {
-    position: fixed;
-    bottom: 0; left: 0; right: 0;
-    display: flex;
-    justify-content: space-between;
-    padding: 10px 16px 20px;
-    z-index: 10;
-    pointer-events: none;
-  }
-  .ctrl-btn {
-    width: 80px;
-    height: 80px;
-    border-radius: 50%;
-    border: 3px solid rgba(120,220,255,0.5);
-    background: rgba(0,150,255,0.2);
-    color: #7ff;
-    font-size: 2em;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    pointer-events: all;
-    user-select: none;
-    -webkit-user-select: none;
-    cursor: pointer;
-    backdrop-filter: blur(4px);
-  }
-  .ctrl-btn:active { background: rgba(0,200,255,0.4); border-color: #0ff; }
-  #jumpBtn {
-    position: fixed;
-    bottom: 30px;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 90px;
-    height: 90px;
-    border-radius: 50%;
-    border: 3px solid rgba(255,200,100,0.6);
-    background: rgba(255,150,0,0.2);
-    color: #ffa;
-    font-size: 1.8em;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    pointer-events: all;
-    user-select: none;
-    -webkit-user-select: none;
-    cursor: pointer;
-    backdrop-filter: blur(4px);
-    z-index: 10;
-  }
-  #jumpBtn:active { background: rgba(255,200,0,0.4); border-color: #ff0; }
+/* ================================================================
+   RESET + SAFE AREA CUSTOM PROPERTIES
+   ================================================================ */
+*, *::before, *::after {
+  margin: 0; padding: 0; box-sizing: border-box;
+  /* Kill all native touch gestures globally; re-enable selectively */
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+:root {
+  /* Safe-area insets – fall back to 0 on non-notch devices */
+  --sat: env(safe-area-inset-top,    0px);
+  --sar: env(safe-area-inset-right,  0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+  --sal: env(safe-area-inset-left,   0px);
+}
+
+html, body {
+  width: 100%; height: 100%;
+  overflow: hidden;
+  background: #0a0a2e;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100dvh;   /* dynamic viewport height (iOS 15.4+) */
+  height: 100vh;    /* fallback */
+  font-family: 'Courier New', monospace;
+  position: fixed;  /* prevent elastic overscroll on iOS */
+  inset: 0;
+}
+
+/* ================================================================
+   HUD STRIP – below status bar (notch / Dynamic Island)
+   ================================================================ */
+#ui {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: calc(var(--sat) + 8px) 16px 8px;
+  background: rgba(0,0,30,0.85);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  z-index: 10;
+  color: #7ff;
+  font-size: 15px;
+  font-weight: bold;
+}
+
+/* ================================================================
+   CANVAS
+   ================================================================ */
+#canvas {
+  display: block;
+  background: #08082a;
+}
+
+/* ================================================================
+   OVERLAY (menu / game-over)
+   ================================================================ */
+#overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding:
+    calc(var(--sat) + 20px)
+    calc(var(--sar) + 20px)
+    calc(var(--sab) + 20px)
+    calc(var(--sal) + 20px);
+  background: rgba(0,0,30,0.93);
+  z-index: 20;
+  color: #fff;
+  text-align: center;
+  gap: 18px;
+}
+#overlay h1 {
+  font-size: 2.8em;
+  color: #7ff;
+  text-shadow: 0 0 20px #0ff, 0 0 40px #07f;
+  letter-spacing: 4px;
+}
+#overlay p { font-size: 1em; color: #adf; max-width: 280px; line-height: 1.6; }
+#overlay .score-display { font-size: 1.5em; color: #ff7; }
+#startBtn {
+  margin-top: 10px;
+  padding: 16px 48px;
+  background: linear-gradient(135deg, #0af, #07f);
+  color: #fff;
+  font-size: 1.3em;
+  font-weight: bold;
+  border: none;
+  border-radius: 50px;
+  cursor: pointer;
+  letter-spacing: 2px;
+  box-shadow: 0 0 24px #0af;
+  touch-action: manipulation; /* no 300ms delay */
+}
+#startBtn:active { transform: scale(0.96); }
+
+/* ================================================================
+   VIRTUAL JOYSTICK  (anchored to LEFT half of screen)
+   ================================================================ */
+#joystick-zone {
+  position: fixed;
+  left: 0; bottom: 0;
+  width: 50%;
+  height: calc(50% + var(--sab));
+  z-index: 11;
+}
+
+/* Outer ring – appears where the thumb first lands */
+#joystick-base {
+  position: absolute;
+  width: 120px; height: 120px;
+  border-radius: 50%;
+  border: 2.5px solid rgba(120,220,255,0.4);
+  background: rgba(0,100,180,0.15);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  transform: translate(-50%, -50%);
+  display: none;
+  pointer-events: none;
+}
+
+/* Nub – follows thumb within RADIUS */
+#joystick-nub {
+  position: absolute;
+  width: 52px; height: 52px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #5cf, #07c);
+  border: 2px solid rgba(180,240,255,0.6);
+  box-shadow: 0 0 12px #0af;
+  transform: translate(-50%, -50%);
+  display: none;
+  pointer-events: none;
+}
+
+/* ================================================================
+   RIGHT HALF – JUMP ZONE
+   ================================================================ */
+#jump-zone {
+  position: fixed;
+  right: 0; bottom: 0;
+  width: 50%;
+  height: calc(50% + var(--sab));
+  z-index: 11;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: calc(var(--sab) + 16px);
+}
+
+/* Subtle hint ring – always visible so player knows the zone */
+#jump-hint {
+  width: 80px; height: 80px;
+  border-radius: 50%;
+  border: 3px solid rgba(255,200,80,0.35);
+  background: rgba(255,140,0,0.12);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255,220,120,0.6);
+  font-size: 2em;
+  pointer-events: none;
+  transition: background 0.08s, border-color 0.08s;
+}
+#jump-zone.pressing #jump-hint {
+  background: rgba(255,200,0,0.35);
+  border-color: #ff0;
+  color: #ff0;
+}
 </style>
 </head>
 <body>
 
+<!-- HUD -->
 <div id="ui">
   <span>SKOR: <span id="scoreEl">0</span></span>
-  <span>ICE TOWER</span>
+  <span>&#10052; ICE TOWER</span>
   <span>EN IYI: <span id="bestEl">0</span></span>
 </div>
 
 <canvas id="canvas"></canvas>
 
-<div id="controls">
-  <div class="ctrl-btn" id="leftBtn">&#9664;</div>
-  <div style="width:100px"></div>
-  <div class="ctrl-btn" id="rightBtn">&#9654;</div>
+<!-- Virtual joystick DOM nodes (positioned by JS) -->
+<div id="joystick-zone">
+  <div id="joystick-base"></div>
+  <div id="joystick-nub"></div>
 </div>
-<div id="jumpBtn">&#8593;</div>
 
+<!-- Right-half jump zone -->
+<div id="jump-zone">
+  <div id="jump-hint">&#8593;</div>
+</div>
+
+<!-- Menu / Game-over overlay -->
 <div id="overlay">
-  <h1>ICE<br>TOWER</h1>
+  <h1>&#10052; ICE<br>TOWER</h1>
   <p>Platformlara zipla, asagi in!<br>Ne kadar derine inebilirsin?<br><br>Duvara yapisip duvardan zipla!</p>
   <div class="score-display" id="finalScore"></div>
   <button id="startBtn">BASLA</button>
   <p style="font-size:0.85em; color:#68a; margin-top:-8px;">
-    &#9664; &#9654; hareket &nbsp;|&nbsp; &#8593; zipla<br>
-    Dokunmatik kontroller aktif
+    Sol: Joystick &nbsp;|&nbsp; Sag: Zipla<br>
+    &#9664; &#9654; klavye &nbsp;|&nbsp; SPACE zipla
   </p>
 </div>
 
 <script>
-// =============================================================================
-// ICE TOWER — Complete Physics & Mechanics System
-// =============================================================================
+/* ================================================================
+   0.  PWA BOOTSTRAP  (runs synchronously before the game loop)
+   ================================================================ */
 
-const canvas = document.getElementById('canvas');
-const ctx    = canvas.getContext('2d');
+// ----------------------------------------------------------------
+// 0a. Generate icons via Canvas – no external files required
+//     Draws a detailed 6-arm snowflake on a rounded-square bg
+// ----------------------------------------------------------------
+function generateIconDataURL(size) {
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const g = c.getContext('2d');
+  const cx = size / 2, cy = size / 2;
+  const R  = size / 2;
+
+  // Rounded square background (navy gradient)
+  const bg = g.createRadialGradient(cx, cy * 0.7, 0, cx, cy, R);
+  bg.addColorStop(0, '#1a2a6e');
+  bg.addColorStop(1, '#04041a');
+  g.fillStyle = bg;
+  g.beginPath();
+  g.roundRect(0, 0, size, size, size * 0.22);
+  g.fill();
+
+  // --- 6-arm snowflake ---
+  const S = size * 0.38; // arm length
+  g.save();
+  g.translate(cx, cy);
+
+  // Outer glow
+  g.shadowColor = '#0cf';
+  g.shadowBlur  = size * 0.12;
+
+  for (let arm = 0; arm < 6; arm++) {
+    g.save();
+    g.rotate((arm * Math.PI) / 3);
+
+    // Main arm
+    const armGrad = g.createLinearGradient(0, 0, 0, -S);
+    armGrad.addColorStop(0, '#7ef8ff');
+    armGrad.addColorStop(1, '#b0f0ff');
+    g.strokeStyle = armGrad;
+    g.lineWidth   = size * 0.04;
+    g.lineCap     = 'round';
+    g.beginPath();
+    g.moveTo(0, 0);
+    g.lineTo(0, -S);
+    g.stroke();
+
+    // Branch pairs at 33% and 60% of arm
+    [0.33, 0.60].forEach((frac, bi) => {
+      const bLen = S * (0.38 - bi * 0.10);
+      const bY   = -S * frac;
+      g.lineWidth   = size * 0.025;
+      g.strokeStyle = '#c0f8ff';
+
+      g.beginPath();
+      g.moveTo(0, bY);
+      g.lineTo(-bLen * 0.866, bY - bLen * 0.5);
+      g.stroke();
+
+      g.beginPath();
+      g.moveTo(0, bY);
+      g.lineTo( bLen * 0.866, bY - bLen * 0.5);
+      g.stroke();
+
+      // Tiny diamond tips on outer branches
+      if (bi === 0) {
+        g.fillStyle = '#e8fcff';
+        [-1, 1].forEach(side => {
+          const tx = side * bLen * 0.866, ty = bY - bLen * 0.5;
+          const ds = size * 0.038;
+          g.beginPath();
+          g.moveTo(tx, ty - ds);
+          g.lineTo(tx + ds, ty);
+          g.lineTo(tx, ty + ds);
+          g.lineTo(tx - ds, ty);
+          g.closePath();
+          g.fill();
+        });
+      }
+    });
+
+    // Tip diamond
+    const ds = size * 0.052;
+    g.fillStyle = '#ffffff';
+    g.beginPath();
+    g.moveTo(0,     -S - ds);
+    g.lineTo(ds * 0.65, -S);
+    g.lineTo(0,     -S + ds);
+    g.lineTo(-ds * 0.65, -S);
+    g.closePath();
+    g.fill();
+
+    g.restore();
+  }
+
+  // Center hexagon
+  g.fillStyle  = '#c8f8ff';
+  g.shadowBlur = size * 0.06;
+  g.shadowColor = '#fff';
+  g.beginPath();
+  for (let i = 0; i < 6; i++) {
+    const a = (i * Math.PI) / 3 - Math.PI / 6;
+    const r = size * 0.075;
+    i === 0 ? g.moveTo(Math.cos(a)*r, Math.sin(a)*r)
+            : g.lineTo(Math.cos(a)*r, Math.sin(a)*r);
+  }
+  g.closePath();
+  g.fill();
+
+  // Bright centre dot
+  g.fillStyle   = '#ffffff';
+  g.shadowBlur  = size * 0.10;
+  g.shadowColor = '#aff';
+  g.beginPath();
+  g.arc(0, 0, size * 0.028, 0, Math.PI * 2);
+  g.fill();
+
+  g.restore();
+  return c.toDataURL('image/png');
+}
+
+const icon512 = generateIconDataURL(512);
+const icon192 = generateIconDataURL(192);
+const icon180 = generateIconDataURL(180); // apple-touch-icon standard size
+
+// Set apple-touch-icon (must be ready before "Add to Home Screen")
+document.getElementById('apple-touch-icon').href = icon180;
+
+// ----------------------------------------------------------------
+// 0b. Inline PWA Manifest via Blob URL
+//     (works in single-file context where there is no manifest.json)
+// ----------------------------------------------------------------
+(function injectManifest() {
+  const manifest = {
+    name:             'Ice Tower',
+    short_name:       'Ice Tower',
+    description:      'Endless ice tower platformer – jump down as far as you can!',
+    display:          'standalone',
+    orientation:      'portrait',
+    start_url:        '.',
+    scope:            '.',
+    theme_color:      '#0a0a2e',
+    background_color: '#0a0a2e',
+    prefer_related_applications: false,
+    categories:       ['games'],
+    lang:             'tr',
+    icons: [
+      { src: icon192, sizes: '192x192', type: 'image/png', purpose: 'any maskable' },
+      { src: icon512, sizes: '512x512', type: 'image/png', purpose: 'any maskable' }
+    ]
+  };
+  const blob = new Blob([JSON.stringify(manifest)], { type: 'application/manifest+json' });
+  document.getElementById('pwa-manifest').href = URL.createObjectURL(blob);
+})();
+
+// ----------------------------------------------------------------
+// 0c. Service Worker – cache-first offline strategy
+//     Full SW code as a string → Blob → Object URL → register
+// ----------------------------------------------------------------
+(function registerServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+
+  // Complete service-worker source.
+  // Delivered as a blob: URL so no separate sw.js file is needed.
+  const SW_SOURCE = `
+const CACHE_NAME = 'ice-tower-v1';
+
+// Derive the page URL from the SW's location so we can pre-cache it.
+// The SW blob URL is something like blob:https://example.com/uuid,
+// but self.registration.scope gives us the actual page scope.
+const PAGE_SCOPE = self.registration.scope;
+
+// ---- Install: pre-cache the page ----
+self.addEventListener('install', event => {
+  event.waitUntil(
+    caches.open(CACHE_NAME).then(cache =>
+      fetch(PAGE_SCOPE, { cache: 'reload' })
+        .then(res => { if (res.ok) cache.put(PAGE_SCOPE, res); })
+        .catch(() => {}) // graceful – offline on first ever install
+    ).then(() => self.skipWaiting())
+  );
+});
+
+// ---- Activate: purge stale caches ----
+self.addEventListener('activate', event => {
+  event.waitUntil(
+    caches.keys()
+      .then(keys => Promise.all(
+        keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k))
+      ))
+      .then(() => self.clients.claim())
+  );
+});
+
+// ---- Fetch: cache-first with background revalidation ----
+self.addEventListener('fetch', event => {
+  if (event.request.method !== 'GET') return;
+
+  event.respondWith(
+    caches.match(event.request).then(cached => {
+      // Serve from cache immediately, revalidate in background
+      if (cached) {
+        fetch(event.request)
+          .then(fresh => {
+            if (fresh && fresh.status === 200) {
+              caches.open(CACHE_NAME).then(c => c.put(event.request, fresh));
+            }
+          })
+          .catch(() => {});
+        return cached;
+      }
+
+      // Not cached – fetch, cache, and return
+      return fetch(event.request).then(res => {
+        if (res && res.status === 200 && res.type !== 'opaque') {
+          const clone = res.clone();
+          caches.open(CACHE_NAME).then(c => c.put(event.request, clone));
+        }
+        return res;
+      }).catch(() => {
+        // Navigation fallback: return cached page shell
+        if (event.request.mode === 'navigate') {
+          return caches.match(PAGE_SCOPE);
+        }
+      });
+    })
+  );
+});
+`;
+
+  const swBlob = new Blob([SW_SOURCE], { type: 'application/javascript' });
+  const swURL  = URL.createObjectURL(swBlob);
+
+  navigator.serviceWorker.register(swURL, { scope: './' })
+    .then(reg => {
+      console.log('[Ice Tower SW] registered – scope:', reg.scope);
+    })
+    .catch(err => {
+      // Blob-URL SW is blocked in some strict contexts (e.g. Firefox).
+      // Game still works perfectly – just no offline caching.
+      console.warn('[Ice Tower SW] registration skipped:', err.message);
+    });
+})();
+
+// ----------------------------------------------------------------
+// 0d. Screen Orientation Lock  (portrait)
+// ----------------------------------------------------------------
+(function lockOrientation() {
+  const doLock = () => {
+    try {
+      if (screen.orientation && screen.orientation.lock) {
+        screen.orientation.lock('portrait').catch(() => {});
+      } else if (screen.lockOrientation) {
+        screen.lockOrientation('portrait');
+      } else if (screen.mozLockOrientation) {
+        screen.mozLockOrientation('portrait');
+      }
+    } catch (e) {}
+  };
+  // Try on page load and on first user interaction (required on some browsers)
+  doLock();
+  document.addEventListener('click',      doLock, { once: true });
+  document.addEventListener('touchstart', doLock, { once: true });
+})();
+
+/* ================================================================
+   1.  CANVAS SETUP + RESPONSIVE RESIZE
+   ================================================================ */
+const canvas     = document.getElementById('canvas');
+const ctx        = canvas.getContext('2d');
 const overlay    = document.getElementById('overlay');
 const scoreEl    = document.getElementById('scoreEl');
 const bestEl     = document.getElementById('bestEl');
 const finalScore = document.getElementById('finalScore');
 const startBtn   = document.getElementById('startBtn');
-const leftBtn    = document.getElementById('leftBtn');
-const rightBtn   = document.getElementById('rightBtn');
-const jumpBtn    = document.getElementById('jumpBtn');
 
-// ---------------------------------------------------------------------------
-// RESPONSIVE CANVAS
-// ---------------------------------------------------------------------------
 function resize() {
   canvas.width  = Math.min(window.innerWidth, 480);
   canvas.height = window.innerHeight;
@@ -174,67 +535,242 @@ function resize() {
 resize();
 window.addEventListener('resize', resize);
 
-// ---------------------------------------------------------------------------
-// PHYSICS CONSTANTS  (all values in px/frame at 60 fps)
-// ---------------------------------------------------------------------------
-const GRAVITY           = 0.45;   // px/frame² downward acceleration
-const JUMP_FORCE        = -11.0;  // initial vy on normal jump (negative = up)
-const JUMP_CUT_FACTOR   = 0.5;    // multiply vy by this when jump released early
-const MAX_FALL_SPEED    = 18;     // terminal velocity cap, px/frame
-const MAX_RUN_SPEED     = 6.0;    // horizontal speed cap, px/frame
-const RUN_ACCEL         = 1.2;    // horizontal acceleration per frame
-const GROUND_FRICTION   = 0.82;   // high friction on ice platforms (slippery but not frictionless)
-const AIR_FRICTION      = 0.95;   // low friction mid-air (preserve momentum)
+/* ================================================================
+   2.  HAPTIC FEEDBACK
+   ================================================================ */
+const Haptic = {
+  _v: p => { try { if (navigator.vibrate) navigator.vibrate(p); } catch(e){} },
+  land:     () => Haptic._v(20),
+  jump:     () => Haptic._v(10),
+  death:    () => Haptic._v([50, 30, 50]),
+  wallJump: () => Haptic._v(15),
+  bounce:   () => Haptic._v([8, 10, 8])
+};
+
+/* ================================================================
+   3.  PHYSICS CONSTANTS
+   ================================================================ */
+const GRAVITY           = 0.45;
+const JUMP_FORCE        = -11.0;
+const JUMP_CUT_FACTOR   = 0.50;
+const MAX_FALL_SPEED    = 18;
+const MAX_RUN_SPEED     = 6.0;
+const RUN_ACCEL         = 1.2;
+const GROUND_FRICTION   = 0.82;
+const AIR_FRICTION      = 0.95;
 
 // Wall mechanics
-const WALL_SLIDE_MAX_VY = 2.0;    // max fall speed when hugging a wall
-const WALL_JUMP_SPEED   = 9.0;    // wall-jump launch magnitude
-// 60° from vertical → cos(60°)=0.5 → vx component, sin(60°)≈0.866 → vy component
-// We push away from wall (opposite x) and upward (negative y)
-const WALL_JUMP_VX      = WALL_JUMP_SPEED * 0.5;    // ≈ 4.5 px/frame horizontal
-const WALL_JUMP_VY      = -(WALL_JUMP_SPEED * 0.866); // ≈ -7.79 px/frame vertical
-const WALL_JUMP_GRACE   = 6;      // frames after leaving wall that wall-jump still fires (≈0.1s@60fps)
+const WALL_SLIDE_MAX_VY = 2.0;
+const WALL_JUMP_SPEED   = 9.0;
+const WALL_JUMP_VX      = WALL_JUMP_SPEED * 0.5;    // ≈ 4.5
+const WALL_JUMP_VY      = -(WALL_JUMP_SPEED * 0.866); // ≈ -7.79
+const WALL_JUMP_GRACE   = 6;
 
 // Timing
-const COYOTE_FRAMES     = 8;      // frames after leaving platform edge where jump still works
-const JUMP_BUFFER_MAX   = 10;     // frames ahead that a jump press is remembered
+const COYOTE_FRAMES     = 8;
+const JUMP_BUFFER_MAX   = 10;
 
 // Dimensions
-const PLAYER_W = 28;
-const PLAYER_H = 36;
+const PLAYER_W  = 28;
+const PLAYER_H  = 36;
 const PLATFORM_H = 14;
 
-// Difficulty / camera
-const SCROLL_SPEED_BASE = 1.2;   // camera auto-scroll base speed (px/frame)
-const PLATFORM_GAP_START = 90;   // initial vertical gap between platforms (px)
-const PLATFORM_GAP_MAX   = 140;  // maximum vertical gap after score 500
-const SCORE_GAP_THRESHOLD = 500; // score at which max gap is reached
+// Scrolling / difficulty
+const SCROLL_SPEED_BASE   = 1.2;
+const PLATFORM_GAP_START  = 90;
+const PLATFORM_GAP_MAX    = 140;
+const SCORE_GAP_THRESHOLD = 500;
 
-// ---------------------------------------------------------------------------
-// GAME STATE
-// ---------------------------------------------------------------------------
+// Sub-step size for swept collision (prevents tunneling)
+const SUB_STEP = 8;
+
+/* ================================================================
+   4.  VIRTUAL JOYSTICK  (left half of screen)
+   ================================================================ */
+const jZone = document.getElementById('joystick-zone');
+const jBase = document.getElementById('joystick-base');
+const jNub  = document.getElementById('joystick-nub');
+
+const joy = {
+  active:  false,
+  touchId: null,
+  ox: 0, oy: 0,   // origin within joystick-zone
+  dx: 0, dy: 0,   // current offset
+  RADIUS: 60,     // max nub travel (px)
+  DEAD: 8         // inner dead-zone (px)
+};
+
+// Public movement flags consumed by physics
+let joyLeft  = false;
+let joyRight = false;
+// Proportional magnitude [0..1] for smooth speed scaling
+let joyMag   = 1;
+
+function joyStart(id, cx, cy) {
+  if (joy.active) return;
+  joy.active  = true;
+  joy.touchId = id;
+  const rect = jZone.getBoundingClientRect();
+  joy.ox = cx - rect.left;
+  joy.oy = cy - rect.top;
+  joy.dx = joy.dy = 0;
+  joyLeft = joyRight = false;
+  joyMag  = 0;
+
+  jBase.style.left = joy.ox + 'px';
+  jBase.style.top  = joy.oy + 'px';
+  jNub.style.left  = joy.ox + 'px';
+  jNub.style.top   = joy.oy + 'px';
+  jBase.style.display = jNub.style.display = 'block';
+}
+
+function joyMove(id, cx, cy) {
+  if (!joy.active || joy.touchId !== id) return;
+  const rect  = jZone.getBoundingClientRect();
+  const dx    = (cx - rect.left) - joy.ox;
+  const dy    = (cy - rect.top)  - joy.oy;
+  const dist  = Math.sqrt(dx * dx + dy * dy);
+  const clamp = Math.min(dist, joy.RADIUS);
+  const angle = Math.atan2(dy, dx);
+  joy.dx = Math.cos(angle) * clamp;
+  joy.dy = Math.sin(angle) * clamp;
+
+  jNub.style.left = (joy.ox + joy.dx) + 'px';
+  jNub.style.top  = (joy.oy + joy.dy) + 'px';
+
+  joyLeft  = joy.dx < -joy.DEAD;
+  joyRight = joy.dx >  joy.DEAD;
+  joyMag   = Math.min(Math.abs(joy.dx) / joy.RADIUS, 1);
+}
+
+function joyEnd(id) {
+  if (joy.touchId !== id) return;
+  joy.active  = false;
+  joy.touchId = null;
+  joy.dx = joy.dy = 0;
+  joyLeft = joyRight = false;
+  joyMag  = 1;
+  jBase.style.display = jNub.style.display = 'none';
+}
+
+jZone.addEventListener('touchstart', e => {
+  e.preventDefault();
+  for (const t of e.changedTouches) joyStart(t.identifier, t.clientX, t.clientY);
+}, { passive: false });
+
+jZone.addEventListener('touchmove', e => {
+  e.preventDefault();
+  for (const t of e.changedTouches) joyMove(t.identifier, t.clientX, t.clientY);
+}, { passive: false });
+
+jZone.addEventListener('touchend', e => {
+  e.preventDefault();
+  for (const t of e.changedTouches) joyEnd(t.identifier);
+}, { passive: false });
+
+jZone.addEventListener('touchcancel', e => {
+  e.preventDefault();
+  for (const t of e.changedTouches) joyEnd(t.identifier);
+}, { passive: false });
+
+/* ================================================================
+   5.  RIGHT HALF – JUMP ZONE  (tap + swipe-up)
+   ================================================================ */
+const jumpZone   = document.getElementById('jump-zone');
+const jumpTouches = new Map(); // touchId → startY
+let jumpHeld = false;
+
+function jumpPress() {
+  if (state === 'playing') {
+    player.jumpBuffer = JUMP_BUFFER_MAX;
+    jumpHeld = true;
+  }
+}
+function jumpRelease() { jumpHeld = false; }
+
+jumpZone.addEventListener('touchstart', e => {
+  e.preventDefault();
+  jumpZone.classList.add('pressing');
+  for (const t of e.changedTouches) {
+    jumpTouches.set(t.identifier, t.clientY);
+  }
+  jumpPress();
+}, { passive: false });
+
+jumpZone.addEventListener('touchmove', e => {
+  e.preventDefault();
+  // Swipe-up detection
+  for (const t of e.changedTouches) {
+    const startY = jumpTouches.get(t.identifier);
+    if (startY !== undefined && startY - t.clientY > 25) {
+      jumpPress();
+      jumpTouches.set(t.identifier, t.clientY); // reset to avoid repeat
+    }
+  }
+}, { passive: false });
+
+jumpZone.addEventListener('touchend', e => {
+  e.preventDefault();
+  for (const t of e.changedTouches) jumpTouches.delete(t.identifier);
+  if (jumpTouches.size === 0) { jumpZone.classList.remove('pressing'); jumpRelease(); }
+}, { passive: false });
+
+jumpZone.addEventListener('touchcancel', e => {
+  e.preventDefault();
+  for (const t of e.changedTouches) jumpTouches.delete(t.identifier);
+  if (jumpTouches.size === 0) { jumpZone.classList.remove('pressing'); jumpRelease(); }
+}, { passive: false });
+
+/* ================================================================
+   6.  KEYBOARD CONTROLS  (desktop / MFi controllers via keyboard)
+   ================================================================ */
+const keys = { left: false, right: false };
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'ArrowLeft'  || e.key === 'a') keys.left  = true;
+  if (e.key === 'ArrowRight' || e.key === 'd') keys.right = true;
+  if ((e.key === 'ArrowUp' || e.key === 'w' || e.key === ' ') && state === 'playing') {
+    if (!jumpHeld) player.jumpBuffer = JUMP_BUFFER_MAX;
+    jumpHeld = true;
+  }
+  if (e.key === 'Enter' && state === 'menu') startGame();
+});
+document.addEventListener('keyup', e => {
+  if (e.key === 'ArrowLeft'  || e.key === 'a') keys.left  = false;
+  if (e.key === 'ArrowRight' || e.key === 'd') keys.right = false;
+  if (e.key === 'ArrowUp' || e.key === 'w' || e.key === ' ') jumpHeld = false;
+});
+
+/* ================================================================
+   7.  PREVENT PULL-TO-REFRESH / OVERSCROLL  (iOS)
+   ================================================================ */
+document.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
+// Allow scroll inside overlay on very small screens
+overlay.addEventListener('touchmove', e => e.stopPropagation(), { passive: true });
+
+/* ================================================================
+   8.  GAME STATE
+   ================================================================ */
 let state      = 'menu';
 let score      = 0;
 let best       = parseInt(localStorage.getItem('iceTowerBest') || '0');
-let cameraY    = 0;      // world-Y of the top of the viewport
+let cameraY    = 0;
 let platforms  = [];
 let particles  = [];
 let player;
-let keys       = { left: false, right: false, up: false };
-let jumpHeld   = false;  // track whether jump button is currently held
 let frameCount = 0;
-let dangerY    = -200;   // world-Y of the freeze wall
+let dangerY    = -200;
 
 bestEl.textContent = best;
 
-// ---------------------------------------------------------------------------
-// HELPERS
-// ---------------------------------------------------------------------------
+/* ================================================================
+   9.  HELPERS
+   ================================================================ */
 function lerp(a, b, t) { return a + (b - a) * t; }
 
-// ---------------------------------------------------------------------------
-// PARTICLE SYSTEM
-// ---------------------------------------------------------------------------
+/* ================================================================
+   10. PARTICLES
+   ================================================================ */
 function spawnParticles(x, y, color, n = 6) {
   for (let i = 0; i < n; i++) {
     particles.push({
@@ -249,14 +785,11 @@ function spawnParticles(x, y, color, n = 6) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// PLATFORM GENERATION
-//   gap grows linearly from PLATFORM_GAP_START to PLATFORM_GAP_MAX
-//   as score increases from 0 to SCORE_GAP_THRESHOLD.
-// ---------------------------------------------------------------------------
+/* ================================================================
+   11. PLATFORM GENERATION  (gap grows with score)
+   ================================================================ */
 function currentGap() {
-  const t = Math.min(score / SCORE_GAP_THRESHOLD, 1);
-  return lerp(PLATFORM_GAP_START, PLATFORM_GAP_MAX, t);
+  return lerp(PLATFORM_GAP_START, PLATFORM_GAP_MAX, Math.min(score / SCORE_GAP_THRESHOLD, 1));
 }
 
 function generatePlatforms(fromY, toY) {
@@ -272,101 +805,63 @@ function generatePlatforms(fromY, toY) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// PLAYER INITIALISATION
-// ---------------------------------------------------------------------------
+/* ================================================================
+   12. GAME INIT
+   ================================================================ */
 function initGame() {
-  score      = 0;
-  frameCount = 0;
-  cameraY    = 0;
-  dangerY    = -200;
-  platforms  = [];
-  particles  = [];
+  score = 0; frameCount = 0; cameraY = 0; dangerY = -200;
+  platforms = []; particles = [];
+  joyLeft = joyRight = false; jumpHeld = false;
 
-  // Starting platform (wide, centred, in upper third of screen)
   platforms.push({
-    x: canvas.width / 2 - 70,
-    y: canvas.height * 0.4,
-    w: 140,
-    h: PLATFORM_H,
-    type: 'normal',
-    crumbled: false,
-    crumbleTimer: 0
+    x: canvas.width / 2 - 70, y: canvas.height * 0.4,
+    w: 140, h: PLATFORM_H, type: 'normal', crumbled: false, crumbleTimer: 0
   });
-
   generatePlatforms(canvas.height * 0.4 - PLATFORM_GAP_START, -10000);
 
   player = {
-    x:  canvas.width / 2 - PLAYER_W / 2,
-    y:  canvas.height * 0.4 - PLAYER_H - 2,
-    vx: 0,
-    vy: 0,
-
-    // Ground state
-    onGround:   false,
-    coyoteTime: 0,       // frames remaining for coyote-time jump
-
-    // Jump buffering / variable height
-    jumpBuffer:  0,      // frames remaining for pre-jump buffer
-    jumpHeld:    false,  // true while jump button held this jump
-    jumpActive:  false,  // true from jump start until vy stops being negative
-
-    // Wall state
-    onWallLeft:   false, // touching left wall this frame
-    onWallRight:  false, // touching right wall this frame
-    wallGrace:    0,     // frames remaining after leaving wall for wall-jump
-
-    // Visual
-    dir:        1,
-    frame:      0,
-    frameTimer: 0
+    x: canvas.width / 2 - PLAYER_W / 2,
+    y: canvas.height * 0.4 - PLAYER_H - 2,
+    vx: 0, vy: 0,
+    onGround: false, coyoteTime: 0,
+    jumpBuffer: 0, jumpHeld: false, jumpActive: false,
+    onWallLeft: false, onWallRight: false,
+    wallGrace: 0, lastWallDir: 0,
+    dir: 1, frame: 0, frameTimer: 0
   };
 }
 
-// ---------------------------------------------------------------------------
-// 1. COLLISION DETECTION — AABB SWEPT COLLISION (anti-tunnel)
-//    We sub-step movement by splitting each axis into segments of at most
-//    8 px so that fast-moving players cannot skip through thin platforms.
-// ---------------------------------------------------------------------------
-const SUB_STEP_SIZE = 8; // px — max distance per sub-step
-
-/**
- * Resolve one axis of player movement against all platforms.
- * axis: 'x' | 'y'
- * Returns { landed, hitLeft, hitRight, hitCeiling }
- */
+/* ================================================================
+   13. SWEPT AABB COLLISION  (sub-stepped to prevent tunneling)
+   ================================================================ */
 function sweepAxis(axis, delta) {
-  let result = { landed: false, hitLeft: false, hitRight: false, hitCeiling: false };
-
-  const steps    = Math.max(1, Math.ceil(Math.abs(delta) / SUB_STEP_SIZE));
-  const stepSize = delta / steps;
+  const result  = { landed: false, hitCeiling: false };
+  const steps   = Math.max(1, Math.ceil(Math.abs(delta) / SUB_STEP));
+  const step    = delta / steps;
 
   for (let s = 0; s < steps; s++) {
-    if (axis === 'x') player.x += stepSize;
-    else              player.y += stepSize;
+    if (axis === 'x') player.x += step;
+    else              player.y += step;
 
     for (const plat of platforms) {
       if (plat.crumbled) continue;
-
-      // Broad AABB overlap test
-      const overlapX = player.x < plat.x + plat.w && player.x + PLAYER_W > plat.x;
-      const overlapY = player.y < plat.y + plat.h && player.y + PLAYER_H > plat.y;
-      if (!overlapX || !overlapY) continue;
+      const ox = player.x < plat.x + plat.w && player.x + PLAYER_W > plat.x;
+      const oy = player.y < plat.y + plat.h && player.y + PLAYER_H > plat.y;
+      if (!ox || !oy) continue;
 
       if (axis === 'y') {
-        const penetrationDown = (player.y + PLAYER_H) - plat.y;
-        const penetrationUp   = (plat.y + plat.h) - player.y;
-
-        if (penetrationDown <= penetrationUp && stepSize >= 0) {
-          // Landing on top of platform
-          player.y = plat.y - PLAYER_H;
+        const penDown = (player.y + PLAYER_H) - plat.y;
+        const penUp   = (plat.y + plat.h)     - player.y;
+        if (penDown <= penUp && step >= 0) {
+          // Land on top
+          player.y      = plat.y - PLAYER_H;
+          player.vy     = 0;
           result.landed = true;
-          player.vy = 0;
 
-          // Platform special effects
           if (plat.type === 'bounce') {
             player.vy = JUMP_FORCE * 1.3;
             spawnParticles(player.x + PLAYER_W / 2, plat.y, '#fa0', 10);
+            Haptic.bounce();
           } else if (plat.type === 'crumble') {
             plat.crumbleTimer++;
             if (plat.crumbleTimer > 20) {
@@ -376,27 +871,20 @@ function sweepAxis(axis, delta) {
           } else {
             spawnParticles(player.x + PLAYER_W / 2, plat.y + 2, '#aef', 2);
           }
-        } else if (penetrationUp < penetrationDown && stepSize < 0) {
-          // Hitting ceiling
+        } else if (penUp < penDown && step < 0) {
+          // Ceiling hit
           player.y = plat.y + plat.h;
-          result.hitCeiling = true;
           if (player.vy < 0) player.vy = 0;
+          result.hitCeiling = true;
         }
-
-      } else { // axis === 'x'
-        const penetrationRight = (player.x + PLAYER_W) - plat.x;
-        const penetrationLeft  = (plat.x + plat.w) - player.x;
-
-        if (penetrationRight <= penetrationLeft && stepSize > 0) {
-          // Player moved right into platform left face
-          player.x = plat.x - PLAYER_W;
-          result.hitRight = true;
-          player.vx = 0;
-        } else if (penetrationLeft < penetrationRight && stepSize < 0) {
-          // Player moved left into platform right face
-          player.x = plat.x + plat.w;
-          result.hitLeft = true;
-          player.vx = 0;
+      } else {
+        // X-axis: horizontal platform wall
+        const penRight = (player.x + PLAYER_W) - plat.x;
+        const penLeft  = (plat.x + plat.w)     - player.x;
+        if (penRight <= penLeft && step > 0) {
+          player.x = plat.x - PLAYER_W; player.vx = 0;
+        } else if (penLeft < penRight && step < 0) {
+          player.x = plat.x + plat.w;  player.vx = 0;
         }
       }
     }
@@ -404,377 +892,325 @@ function sweepAxis(axis, delta) {
   return result;
 }
 
-// ---------------------------------------------------------------------------
-// 2. WALL COLLISION DETECTION (tower side walls)
-//    Tower walls are the canvas left/right edges.
-// ---------------------------------------------------------------------------
-function resolveWallCollision() {
+/* ================================================================
+   14. TOWER WALL COLLISION  (canvas left/right edges)
+   ================================================================ */
+function resolveWalls() {
   player.onWallLeft  = false;
   player.onWallRight = false;
-
-  if (player.x <= 0) {
-    player.x = 0;
-    if (player.vx < 0) player.vx = 0;
-    player.onWallLeft = true;
-  }
-  if (player.x + PLAYER_W >= canvas.width) {
-    player.x = canvas.width - PLAYER_W;
-    if (player.vx > 0) player.vx = 0;
-    player.onWallRight = true;
-  }
+  if (player.x <= 0)                       { player.x = 0;                      if (player.vx < 0) player.vx = 0; player.onWallLeft  = true; }
+  if (player.x + PLAYER_W >= canvas.width) { player.x = canvas.width - PLAYER_W; if (player.vx > 0) player.vx = 0; player.onWallRight = true; }
 }
 
-// ---------------------------------------------------------------------------
-// 3. WALL SLIDE
-//    When player is pressed against a wall (onWallLeft/Right) and moving
-//    toward it (or neutral) and is NOT on the ground, cap downward vy to
-//    WALL_SLIDE_MAX_VY, creating a slow slide effect.
-// ---------------------------------------------------------------------------
+/* ================================================================
+   15. WALL SLIDE  (limit fall speed while pressed against wall)
+   ================================================================ */
 function applyWallSlide() {
   if (player.onGround) return;
+  const goLeft  = keys.left  || joyLeft;
+  const goRight = keys.right || joyRight;
 
-  const slidingLeft  = player.onWallLeft  && (keys.left  || player.vx <= 0);
-  const slidingRight = player.onWallRight && (keys.right || player.vx >= 0);
+  const slideLeft  = player.onWallLeft  && (goLeft  || player.vx <= 0);
+  const slideRight = player.onWallRight && (goRight || player.vx >= 0);
 
-  if ((slidingLeft || slidingRight) && player.vy > WALL_SLIDE_MAX_VY) {
-    player.vy = WALL_SLIDE_MAX_VY; // slow slide down the wall
-    // Emit occasional ice-dust particles
+  if ((slideLeft || slideRight) && player.vy > WALL_SLIDE_MAX_VY) {
+    player.vy = WALL_SLIDE_MAX_VY;
     if (frameCount % 8 === 0) {
-      const wx = slidingLeft ? 0 : canvas.width;
+      const wx = slideLeft ? 2 : canvas.width - 4;
       spawnParticles(wx, player.y + PLAYER_H * 0.6, '#aef', 2);
     }
   }
 
-  // Update wall-grace timer
-  if (slidingLeft || slidingRight) {
-    player.wallGrace = WALL_JUMP_GRACE;
-    player.lastWallDir = slidingLeft ? -1 : 1; // -1 = was on left wall
+  if (slideLeft || slideRight) {
+    player.wallGrace   = WALL_JUMP_GRACE;
+    player.lastWallDir = slideLeft ? -1 : 1;
   } else if (player.wallGrace > 0) {
     player.wallGrace--;
   }
 }
 
-// ---------------------------------------------------------------------------
-// 4. WALL JUMP
-//    When sliding on wall (or within grace period) + jump pressed:
-//    launch at 60° from vertical, away from wall.
-//
-//    Math: magnitude = WALL_JUMP_SPEED = 9
-//      angle = 60° from vertical
-//      vx = ±WALL_JUMP_VX = ±(9 * sin60°) = ±(9 * 0.866) ≈ ±7.79  — AWAY from wall
-//      vy =  -WALL_JUMP_VY = -(9 * cos60°) = -(9 * 0.5)   = -4.5   — UP
-//
-//    Wait — let us use 60° from HORIZONTAL (like the original Ice Tower feel):
-//      vx = WALL_JUMP_SPEED * cos(60°) = 9 * 0.5   = 4.5  (away from wall)
-//      vy = WALL_JUMP_SPEED * sin(60°) = 9 * 0.866 ≈ 7.79 (upward, negative)
-//    This gives a steep diagonal that feels intentional and powerful.
-// ---------------------------------------------------------------------------
+/* ================================================================
+   16. WALL JUMP  (60° from horizontal, away from wall)
+   ================================================================ */
 function tryWallJump() {
   const onWall = player.onWallLeft || player.onWallRight || player.wallGrace > 0;
   if (!onWall || player.onGround) return false;
 
-  // Direction to launch: opposite of the wall the player was/is on
-  const wallDir = player.onWallLeft ? -1
-                : player.onWallRight ? 1
-                : player.lastWallDir; // use grace direction
+  const wallDir  = player.onWallLeft ? -1
+                 : player.onWallRight ? 1
+                 : player.lastWallDir;
 
-  // Away from wall = opposite sign
-  player.vx = -wallDir * WALL_JUMP_VX;  // WALL_JUMP_VX = 4.5
-  player.vy = WALL_JUMP_VY;             // WALL_JUMP_VY = -7.79
-
+  player.vx         = -wallDir * WALL_JUMP_VX;
+  player.vy         = WALL_JUMP_VY;
   player.wallGrace  = 0;
   player.jumpActive = true;
   player.jumpHeld   = jumpHeld;
 
   spawnParticles(
-    wallDir === -1 ? 0 : canvas.width,   // particle source at wall
+    wallDir === -1 ? 2 : canvas.width - 4,
     player.y + PLAYER_H * 0.5,
     '#0ff', 8
   );
+  Haptic.wallJump();
   return true;
 }
 
-// ---------------------------------------------------------------------------
-// 5. NORMAL JUMP  (with coyote time + jump buffer)
-// ---------------------------------------------------------------------------
+/* ================================================================
+   17. NORMAL JUMP  (coyote + buffer)
+   ================================================================ */
 function tryNormalJump() {
-  if (player.jumpBuffer <= 0) return false;
-  if (!player.onGround && player.coyoteTime <= 0) return false;
+  if (player.jumpBuffer <= 0)                              return false;
+  if (!player.onGround && player.coyoteTime <= 0)         return false;
 
-  player.vy         = JUMP_FORCE;   // -11
+  player.vy         = JUMP_FORCE;
   player.coyoteTime = 0;
   player.jumpBuffer = 0;
   player.jumpActive = true;
   player.jumpHeld   = jumpHeld;
 
   spawnParticles(player.x + PLAYER_W / 2, player.y + PLAYER_H, '#7ff', 8);
+  Haptic.jump();
   return true;
 }
 
-// ---------------------------------------------------------------------------
-// 6. VARIABLE JUMP HEIGHT
-//    While vy is negative (ascending) AND jump button was released:
-//    cut vy by JUMP_CUT_FACTOR (0.5), effectively halving the jump height.
-//    This is applied once per jump when the button is released mid-air.
-// ---------------------------------------------------------------------------
+/* ================================================================
+   18. VARIABLE JUMP HEIGHT  (release early = shorter jump)
+   ================================================================ */
 function applyVariableJump() {
   if (player.jumpActive && player.vy < 0) {
     if (!jumpHeld && player.jumpHeld) {
-      // Button was released this frame while still ascending
       player.vy *= JUMP_CUT_FACTOR;
     }
   }
-  player.jumpHeld = jumpHeld;
-
-  // Jump is no longer "active" once player starts falling
+  player.jumpHeld  = jumpHeld;
   if (player.vy >= 0) player.jumpActive = false;
 }
 
-// ---------------------------------------------------------------------------
-// 7. CAMERA SYSTEM
-//    - Camera follows player downward only (never scrolls up to reveal sky).
-//    - Auto-scrolls downward at increasing speed over time.
-//    - Player dies if:
-//        a) above camera top   → caught by freeze wall
-//        b) below camera bottom → fell off screen
-//    - Viewport shows ~2 screen-heights of world content ahead (below).
-// ---------------------------------------------------------------------------
+/* ================================================================
+   19. CAMERA + DANGER WALL
+   ================================================================ */
 function updateCamera() {
-  // Target: keep player in upper ~38% of the screen
-  const targetCameraY = player.y - canvas.height * 0.38;
+  const target = player.y - canvas.height * 0.38;
+  if (target < cameraY) cameraY = target;
 
-  // Camera only follows player DOWN (lower world-Y values = higher on screen)
-  // cameraY is the world-Y at the top of the viewport.
-  // Moving cameraY down means the viewport moves down → player appears to go up.
-  // We DECREASE cameraY to scroll up (reveal higher world), INCREASE to scroll down.
-  // Following player DOWN = cameraY should track when player is going further down.
-  if (targetCameraY < cameraY) {
-    // Player is higher than our target band — chase them up
-    cameraY = targetCameraY;
-  }
-
-  // Auto-scroll: difficulty ramp  (§8 formula)
-  // baseSpeed + (frameCount * 0.001) so at frame 3000 (50 s) speed = 1.2 + 3 = 4.2
   const autoScroll = SCROLL_SPEED_BASE + frameCount * 0.001;
-  cameraY -= autoScroll; // move viewport downward in world coords
-
-  // Freeze wall position: just above camera top
-  dangerY = cameraY - 60; // world-Y — 60 px above the top of the viewport
+  cameraY -= autoScroll;
+  dangerY  = cameraY - 60;
 }
 
-function checkDeathBounds() {
-  const playerScreenY = player.y - cameraY;
-  // Above camera top (freeze wall got them)
-  if (player.y < dangerY + PLAYER_H) return true;
-  // Below camera bottom (fell through)
-  if (playerScreenY > canvas.height + 80) return true;
-  return false;
+function isDead() {
+  return player.y < dangerY + PLAYER_H ||
+         player.y - cameraY > canvas.height + 80;
 }
 
-// ---------------------------------------------------------------------------
-// MAIN UPDATE LOOP
-// ---------------------------------------------------------------------------
+/* ================================================================
+   20. MAIN PHYSICS UPDATE  (called once per rAF)
+   ================================================================ */
 function update() {
   if (state !== 'playing') return;
   frameCount++;
 
-  // ---- Horizontal input ----
-  if (keys.left) {
-    player.vx -= RUN_ACCEL;
-    player.dir = -1;
-  }
-  if (keys.right) {
-    player.vx += RUN_ACCEL;
-    player.dir = 1;
-  }
+  const goLeft  = keys.left  || joyLeft;
+  const goRight = keys.right || joyRight;
+  const mag     = joy.active ? joyMag : 1; // proportional speed from joystick
 
-  // ---- Ice friction (ground vs air) ----
+  if (goLeft)  { player.vx -= RUN_ACCEL * mag; player.dir = -1; }
+  if (goRight) { player.vx += RUN_ACCEL * mag; player.dir =  1; }
+
   const friction = player.onGround ? GROUND_FRICTION : AIR_FRICTION;
-  player.vx *= friction;
+  player.vx = Math.max(-MAX_RUN_SPEED, Math.min(MAX_RUN_SPEED, player.vx * friction));
 
-  // Clamp horizontal speed to MAX_RUN_SPEED
-  player.vx = Math.max(-MAX_RUN_SPEED, Math.min(MAX_RUN_SPEED, player.vx));
-
-  // ---- Gravity ----
   player.vy += GRAVITY;
   player.vy  = Math.min(player.vy, MAX_FALL_SPEED);
 
-  // ---- Wall slide (applied before movement resolves) ----
-  // (runs after previous frame's wall flags are known)
   applyWallSlide();
-
-  // ---- Variable jump height ----
   applyVariableJump();
 
-  // ---- Coyote time countdown ----
-  if (player.onGround) {
-    player.coyoteTime = COYOTE_FRAMES;
-  } else if (player.coyoteTime > 0) {
-    player.coyoteTime--;
-  }
+  if (player.onGround)           player.coyoteTime = COYOTE_FRAMES;
+  else if (player.coyoteTime > 0) player.coyoteTime--;
+  if (player.jumpBuffer > 0)      player.jumpBuffer--;
 
-  // ---- Jump buffer countdown ----
-  if (player.jumpBuffer > 0) player.jumpBuffer--;
-
-  // ---- Jump resolution (wall jump takes priority) ----
   if (player.jumpBuffer > 0) {
-    const didWallJump = tryWallJump();
-    if (!didWallJump) tryNormalJump();
+    if (!tryWallJump()) tryNormalJump();
   }
 
-  // ---- Reset ground flag before collision ----
-  player.onGround = false;
+  // Haptic: landing
+  const wasOnGround = player.onGround;
+  player.onGround   = false;
 
-  // ---- Swept AABB platform collision — X axis first, then Y ----
-  // Resolving X first prevents corner-catching on vertical surfaces.
-  const collX = sweepAxis('x', player.vx);
-  const collY = sweepAxis('y', player.vy);
+  const cX = sweepAxis('x', player.vx);
+  const cY = sweepAxis('y', player.vy);
 
-  if (collY.landed) player.onGround = true;
-  if (collY.hitCeiling && player.vy < 0) player.vy = 0;
+  if (cY.landed) {
+    player.onGround = true;
+    if (!wasOnGround) Haptic.land();
+  }
 
-  // ---- Tower wall collision + wall slide flags ----
-  resolveWallCollision();
-
-  // ---- Camera + danger wall ----
+  resolveWalls();
   updateCamera();
 
-  // ---- Score = depth below starting position (each 10 px world-Y = 1 point) ----
   score = Math.max(score, Math.floor((-player.y + canvas.height * 0.4) / 10));
   scoreEl.textContent = score;
 
-  // ---- Procedural platform generation (keep 3 screens below camera) ----
-  const lowestPlatY = Math.min(...platforms.map(p => p.y));
-  if (lowestPlatY > cameraY - canvas.height * 2) {
-    generatePlatforms(lowestPlatY - currentGap(), cameraY - canvas.height * 3);
+  // Generate platforms ahead
+  const lowestY = Math.min(...platforms.map(p => p.y));
+  if (lowestY > cameraY - canvas.height * 2) {
+    generatePlatforms(lowestY - currentGap(), cameraY - canvas.height * 3);
   }
 
-  // ---- Cull platforms above camera + more than 1 screen off bottom ----
+  // Cull off-screen platforms
   platforms = platforms.filter(p =>
-    p.y < cameraY + canvas.height + 100 &&
-    p.y > cameraY - canvas.height * 2.5
+    p.y < cameraY + canvas.height + 100 && p.y > cameraY - canvas.height * 2.5
   );
 
-  // ---- Death check ----
-  if (checkDeathBounds()) {
-    triggerDeath();
-    return;
+  // Particle update
+  for (const p of particles) {
+    p.x += p.vx; p.y += p.vy; p.vy += 0.15; p.life -= p.decay;
   }
+  particles = particles.filter(p => p.life > 0);
 
-  // ---- Player walk animation ----
+  // Walk animation
   if (Math.abs(player.vx) > 0.3) {
     player.frameTimer++;
     if (player.frameTimer > 6) { player.frame = (player.frame + 1) % 4; player.frameTimer = 0; }
   }
 
-  // ---- Particles ----
-  for (const p of particles) {
-    p.x += p.vx; p.y += p.vy; p.vy += 0.15; p.life -= p.decay;
-  }
-  particles = particles.filter(p => p.life > 0);
+  if (isDead()) triggerDeath();
 }
 
-// ---------------------------------------------------------------------------
-// DEATH
-// ---------------------------------------------------------------------------
+/* ================================================================
+   21. DEATH
+   ================================================================ */
 function triggerDeath() {
-  state = 'dead';
+  Haptic.death();
+  state = 'menu';
   if (score > best) {
     best = score;
     localStorage.setItem('iceTowerBest', best);
-    bestEl.textContent = best;
-    finalScore.textContent = 'YENİ REKOR: ' + score;
+    bestEl.textContent   = best;
+    finalScore.textContent = 'YENI REKOR: ' + score;
   } else {
     finalScore.textContent = 'SKOR: ' + score + '  |  EN IYI: ' + best;
   }
-  startBtn.textContent = 'TEKRAR';
+  startBtn.textContent  = 'TEKRAR';
   overlay.style.display = 'flex';
-  state = 'menu';
 }
 
-// ---------------------------------------------------------------------------
-// INPUT HANDLING
-// ---------------------------------------------------------------------------
-// jumpHeld tracks whether jump is currently physically held down
-// jumpBuffer is set on each fresh press so buffered jumps work
-
-document.addEventListener('keydown', e => {
-  if (e.key === 'ArrowLeft'  || e.key === 'a') keys.left  = true;
-  if (e.key === 'ArrowRight' || e.key === 'd') keys.right = true;
-  if ((e.key === 'ArrowUp' || e.key === 'w' || e.key === ' ') && state === 'playing') {
-    if (!jumpHeld) {                     // only buffer on fresh press, not hold
-      player.jumpBuffer = JUMP_BUFFER_MAX;
-    }
-    jumpHeld = true;
-  }
-  if (e.key === 'Enter' && state === 'menu') startGame();
-});
-document.addEventListener('keyup', e => {
-  if (e.key === 'ArrowLeft'  || e.key === 'a') keys.left  = false;
-  if (e.key === 'ArrowRight' || e.key === 'd') keys.right = false;
-  if (e.key === 'ArrowUp' || e.key === 'w' || e.key === ' ') jumpHeld = false;
-});
-
-// Touch direction buttons
-function holdStart(key) { keys[key] = true; }
-function holdEnd(key)   { keys[key] = false; }
-
-leftBtn.addEventListener('touchstart',  e => { e.preventDefault(); holdStart('left'); },  { passive: false });
-leftBtn.addEventListener('touchend',    e => { e.preventDefault(); holdEnd('left'); },    { passive: false });
-leftBtn.addEventListener('mousedown',   () => holdStart('left'));
-leftBtn.addEventListener('mouseup',     () => holdEnd('left'));
-
-rightBtn.addEventListener('touchstart', e => { e.preventDefault(); holdStart('right'); }, { passive: false });
-rightBtn.addEventListener('touchend',   e => { e.preventDefault(); holdEnd('right'); },   { passive: false });
-rightBtn.addEventListener('mousedown',  () => holdStart('right'));
-rightBtn.addEventListener('mouseup',    () => holdEnd('right'));
-
-// Jump button: set buffer on press, clear jumpHeld on release
-jumpBtn.addEventListener('touchstart', e => {
-  e.preventDefault();
-  if (state === 'playing') {
-    player.jumpBuffer = JUMP_BUFFER_MAX;
-    jumpHeld = true;
-  }
-}, { passive: false });
-jumpBtn.addEventListener('touchend', e => {
-  e.preventDefault();
-  jumpHeld = false;
-}, { passive: false });
-jumpBtn.addEventListener('mousedown', () => {
-  if (state === 'playing') { player.jumpBuffer = JUMP_BUFFER_MAX; jumpHeld = true; }
-});
-jumpBtn.addEventListener('mouseup', () => { jumpHeld = false; });
-
-// Swipe-up on canvas
-let touchStartY = 0;
-canvas.addEventListener('touchstart', e => { touchStartY = e.touches[0].clientY; }, { passive: true });
-canvas.addEventListener('touchend', e => {
-  const dy = touchStartY - e.changedTouches[0].clientY;
-  if (dy > 30 && state === 'playing') {
-    player.jumpBuffer = JUMP_BUFFER_MAX;
-    jumpHeld = true;
-    setTimeout(() => { jumpHeld = false; }, 80); // auto-release for swipe
-  }
-}, { passive: true });
-
-startBtn.addEventListener('click', startGame);
-
+/* ================================================================
+   22. START / RESTART
+   ================================================================ */
 function startGame() {
-  jumpHeld = false;
   initGame();
-  state = 'playing';
+  state                = 'playing';
   overlay.style.display = 'none';
 }
 
-// ---------------------------------------------------------------------------
-// DRAW — PLAYER
-// ---------------------------------------------------------------------------
-function drawPlayer() {
-  const sx = player.x;
-  const sy = player.y - cameraY;
+startBtn.addEventListener('click', startGame);
+startBtn.addEventListener('touchend', e => { e.preventDefault(); startGame(); }, { passive: false });
 
-  // Wall-slide visual: lean toward wall
+/* ================================================================
+   23. DRAW — BACKGROUND
+   ================================================================ */
+function drawBackground() {
+  const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+  grad.addColorStop(0, '#050518');
+  grad.addColorStop(1, '#0a1535');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Parallax stars (pseudo-random from index seed)
+  ctx.fillStyle = 'rgba(200,220,255,0.6)';
+  const starSeed = Math.floor(cameraY / 200);
+  for (let i = 0; i < 40; i++) {
+    const s  = Math.sin(i * 7.3 + starSeed) * 0.5 + 0.5;
+    const sx = (i * 137.5) % canvas.width;
+    const sy = ((i * 97.3 + cameraY * 0.05) % canvas.height + canvas.height) % canvas.height;
+    ctx.fillRect(sx, sy, s * 2 + 0.5, s * 2 + 0.5);
+  }
+
+  // Tower wall dashes
+  ctx.strokeStyle = 'rgba(100,180,255,0.12)';
+  ctx.lineWidth   = 2;
+  ctx.setLineDash([8, 16]);
+  ctx.beginPath();
+  ctx.moveTo(0, 0); ctx.lineTo(0, canvas.height);
+  ctx.moveTo(canvas.width, 0); ctx.lineTo(canvas.width, canvas.height);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Brick pattern on sides
+  ctx.strokeStyle = 'rgba(80,140,200,0.08)';
+  ctx.lineWidth   = 1;
+  const bH = 30, bW = 20;
+  const off = ((-cameraY) % bH + bH) % bH;
+  for (let row = -1; row < canvas.height / bH + 2; row++) {
+    const y  = row * bH + off;
+    const dx = (row % 2) * bW * 0.5;
+    for (let col = 0; col < 3; col++) {
+      ctx.strokeRect(col * bW + dx - bW, y, bW, bH);
+      ctx.strokeRect(canvas.width - col * bW - dx, y, bW, bH);
+    }
+  }
+}
+
+/* ================================================================
+   24. DRAW — PLATFORMS
+   ================================================================ */
+function drawPlatform(p) {
+  const sy = p.y - cameraY;
+  if (sy > canvas.height + 20 || sy < -30) return;
+  ctx.save();
+
+  if (p.type === 'bounce') {
+    const g = ctx.createLinearGradient(p.x, sy - p.h, p.x, sy + p.h);
+    g.addColorStop(0, '#ffa040'); g.addColorStop(1, '#c05000');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.roundRect(p.x, sy - p.h / 2, p.w, p.h, 4); ctx.fill();
+    ctx.strokeStyle = '#ffcc44'; ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.fillStyle = '#ffe'; ctx.font = '10px sans-serif';
+    ctx.fillText('^^', p.x + p.w / 2 - 8, sy - p.h / 2 - 2);
+
+  } else if (p.type === 'crumble') {
+    const crack = p.crumbleTimer / 20;
+    ctx.globalAlpha = 1 - crack * 0.7;
+    const g = ctx.createLinearGradient(p.x, sy - p.h, p.x, sy + p.h);
+    g.addColorStop(0, '#ff6060'); g.addColorStop(1, '#900');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.roundRect(p.x, sy - p.h / 2, p.w, p.h, 3); ctx.fill();
+    if (crack > 0.3) {
+      ctx.strokeStyle = '#f00'; ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(p.x + p.w * 0.3, sy - p.h / 2); ctx.lineTo(p.x + p.w * 0.5, sy + p.h / 2);
+      ctx.moveTo(p.x + p.w * 0.6, sy - p.h / 2); ctx.lineTo(p.x + p.w * 0.45, sy + p.h / 2);
+      ctx.stroke();
+    }
+
+  } else {
+    const g = ctx.createLinearGradient(p.x, sy - p.h, p.x, sy + p.h * 2);
+    g.addColorStop(0, '#b8f0ff'); g.addColorStop(0.4, '#60c8f0'); g.addColorStop(1, '#2080c0');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.roundRect(p.x, sy - p.h / 2, p.w, p.h, 5); ctx.fill();
+
+    ctx.fillStyle = 'rgba(255,255,255,0.45)';
+    ctx.beginPath(); ctx.roundRect(p.x + 4, sy - p.h / 2 + 2, p.w - 8, p.h / 2 - 1, 3); ctx.fill();
+
+    ctx.strokeStyle = 'rgba(200,240,255,0.5)'; ctx.lineWidth = 1;
+    for (let i = 0; i < 3; i++) {
+      const icx = p.x + p.w * (0.2 + i * 0.3), icy = sy - p.h / 2 + 1;
+      ctx.beginPath();
+      ctx.moveTo(icx, icy);     ctx.lineTo(icx, icy - 5);
+      ctx.moveTo(icx - 3, icy - 2); ctx.lineTo(icx + 3, icy - 2);
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
+/* ================================================================
+   25. DRAW — PLAYER
+   ================================================================ */
+function drawPlayer() {
+  const sx = player.x, sy = player.y - cameraY;
   const wallLean = player.onWallLeft ? 0.15 : player.onWallRight ? -0.15 : 0;
 
   ctx.save();
@@ -784,28 +1220,22 @@ function drawPlayer() {
 
   // Body
   ctx.fillStyle = '#3af';
-  ctx.beginPath();
-  ctx.roundRect(-PLAYER_W/2+2, -PLAYER_H/2+8, PLAYER_W-4, PLAYER_H-10, 4);
-  ctx.fill();
+  ctx.beginPath(); ctx.roundRect(-PLAYER_W/2+2, -PLAYER_H/2+8, PLAYER_W-4, PLAYER_H-10, 4); ctx.fill();
 
   // Head
   ctx.fillStyle = '#fdd';
-  ctx.beginPath();
-  ctx.ellipse(0, -PLAYER_H/2+4, 10, 11, 0, 0, Math.PI * 2);
-  ctx.fill();
+  ctx.beginPath(); ctx.ellipse(0, -PLAYER_H/2+4, 10, 11, 0, 0, Math.PI*2); ctx.fill();
 
   // Eyes
-  ctx.fillStyle = '#333';
-  ctx.fillRect(3, -PLAYER_H/2+1, 3, 3);
+  ctx.fillStyle = '#333'; ctx.fillRect(3, -PLAYER_H/2+1, 3, 3);
 
   // Hat
   ctx.fillStyle = '#07f';
-  ctx.fillRect(-8, -PLAYER_H/2-6, 16, 6);
+  ctx.fillRect(-8, -PLAYER_H/2-6,  16, 6);
   ctx.fillRect(-5, -PLAYER_H/2-12, 10, 8);
 
   // Scarf
-  ctx.fillStyle = '#f44';
-  ctx.fillRect(-PLAYER_W/2+2, -PLAYER_H/2+19, PLAYER_W-4, 5);
+  ctx.fillStyle = '#f44'; ctx.fillRect(-PLAYER_W/2+2, -PLAYER_H/2+19, PLAYER_W-4, 5);
 
   // Legs (animated)
   const legOff = Math.sin(player.frame * Math.PI / 2) * 5;
@@ -813,14 +1243,14 @@ function drawPlayer() {
   ctx.fillRect(-8, PLAYER_H/2-10, 7, 10 + legOff);
   ctx.fillRect( 1, PLAYER_H/2-10, 7, 10 - legOff);
 
-  // Ice skates
+  // Skates
   ctx.fillStyle = '#aef';
   ctx.fillRect(-10, PLAYER_H/2-2+legOff, 9, 4);
   ctx.fillRect(  1, PLAYER_H/2-2-legOff, 9, 4);
 
   ctx.restore();
 
-  // Wall-slide spark effect
+  // Wall-slide sparks
   if ((player.onWallLeft || player.onWallRight) && !player.onGround && player.vy > 0) {
     ctx.fillStyle = 'rgba(0,220,255,0.7)';
     const wx = player.onWallLeft ? sx : sx + PLAYER_W;
@@ -834,149 +1264,21 @@ function drawPlayer() {
   }
 }
 
-// ---------------------------------------------------------------------------
-// DRAW — PLATFORM
-// ---------------------------------------------------------------------------
-function drawPlatform(p) {
-  const sy = p.y - cameraY;
-  if (sy > canvas.height + 20 || sy < -30) return;
-
-  ctx.save();
-
-  if (p.type === 'bounce') {
-    const grad = ctx.createLinearGradient(p.x, sy - p.h, p.x, sy + p.h);
-    grad.addColorStop(0, '#ffa040');
-    grad.addColorStop(1, '#c05000');
-    ctx.fillStyle = grad;
-    ctx.beginPath();
-    ctx.roundRect(p.x, sy - p.h / 2, p.w, p.h, 4);
-    ctx.fill();
-    ctx.strokeStyle = '#ffcc44';
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
-    ctx.fillStyle = '#ffe';
-    ctx.font = '10px sans-serif';
-    ctx.fillText('^^', p.x + p.w / 2 - 8, sy - p.h / 2 - 2);
-
-  } else if (p.type === 'crumble') {
-    const crack = p.crumbleTimer / 20;
-    ctx.globalAlpha = 1 - crack * 0.7;
-    const grad = ctx.createLinearGradient(p.x, sy - p.h, p.x, sy + p.h);
-    grad.addColorStop(0, '#ff6060');
-    grad.addColorStop(1, '#900');
-    ctx.fillStyle = grad;
-    ctx.beginPath();
-    ctx.roundRect(p.x, sy - p.h / 2, p.w, p.h, 3);
-    ctx.fill();
-    if (crack > 0.3) {
-      ctx.strokeStyle = '#f00';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(p.x + p.w * 0.3, sy - p.h / 2);
-      ctx.lineTo(p.x + p.w * 0.5, sy + p.h / 2);
-      ctx.moveTo(p.x + p.w * 0.6, sy - p.h / 2);
-      ctx.lineTo(p.x + p.w * 0.45, sy + p.h / 2);
-      ctx.stroke();
-    }
-
-  } else {
-    // Normal ice platform
-    const grad = ctx.createLinearGradient(p.x, sy - p.h, p.x, sy + p.h * 2);
-    grad.addColorStop(0,   '#b8f0ff');
-    grad.addColorStop(0.4, '#60c8f0');
-    grad.addColorStop(1,   '#2080c0');
-    ctx.fillStyle = grad;
-    ctx.beginPath();
-    ctx.roundRect(p.x, sy - p.h / 2, p.w, p.h, 5);
-    ctx.fill();
-
-    // Specular shine
-    ctx.fillStyle = 'rgba(255,255,255,0.45)';
-    ctx.beginPath();
-    ctx.roundRect(p.x + 4, sy - p.h / 2 + 2, p.w - 8, p.h / 2 - 1, 3);
-    ctx.fill();
-
-    // Ice crystals
-    ctx.strokeStyle = 'rgba(200,240,255,0.5)';
-    ctx.lineWidth = 1;
-    for (let i = 0; i < 3; i++) {
-      const cx = p.x + p.w * (0.2 + i * 0.3);
-      const cy = sy - p.h / 2 + 1;
-      ctx.beginPath();
-      ctx.moveTo(cx, cy);     ctx.lineTo(cx, cy - 5);
-      ctx.moveTo(cx-3, cy-2); ctx.lineTo(cx+3, cy-2);
-      ctx.stroke();
-    }
-  }
-
-  ctx.restore();
-}
-
-// ---------------------------------------------------------------------------
-// DRAW — BACKGROUND
-// ---------------------------------------------------------------------------
-function drawBackground() {
-  const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
-  grad.addColorStop(0, '#050518');
-  grad.addColorStop(1, '#0a1535');
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-  // Parallax stars
-  ctx.fillStyle = 'rgba(200,220,255,0.6)';
-  const starSeed = Math.floor(cameraY / 200);
-  for (let i = 0; i < 40; i++) {
-    const s  = Math.sin(i * 7.3 + starSeed) * 0.5 + 0.5;
-    const sx = (i * 137.5) % canvas.width;
-    const sy = ((i * 97.3 + cameraY * 0.05) % canvas.height + canvas.height) % canvas.height;
-    ctx.fillRect(sx, sy, s * 2 + 0.5, s * 2 + 0.5);
-  }
-
-  // Tower wall guides
-  ctx.strokeStyle = 'rgba(100,180,255,0.12)';
-  ctx.lineWidth = 2;
-  ctx.setLineDash([8, 16]);
-  ctx.beginPath();
-  ctx.moveTo(0, 0); ctx.lineTo(0, canvas.height);
-  ctx.moveTo(canvas.width, 0); ctx.lineTo(canvas.width, canvas.height);
-  ctx.stroke();
-  ctx.setLineDash([]);
-
-  // Brick / ice block pattern on sides
-  ctx.strokeStyle = 'rgba(80,140,200,0.08)';
-  ctx.lineWidth = 1;
-  const brickH   = 30;
-  const brickW   = 20;
-  const camOff   = ((-cameraY) % brickH + brickH) % brickH;
-  for (let row = -1; row < canvas.height / brickH + 2; row++) {
-    const y      = row * brickH + camOff;
-    const offset = (row % 2) * brickW * 0.5;
-    for (let col = 0; col < 3; col++) {
-      ctx.strokeRect(col * brickW + offset - brickW, y, brickW, brickH);
-      ctx.strokeRect(canvas.width - col * brickW - offset, y, brickW, brickH);
-    }
-  }
-}
-
-// ---------------------------------------------------------------------------
-// DRAW — FREEZE WALL
-// ---------------------------------------------------------------------------
+/* ================================================================
+   26. DRAW — FREEZE WALL
+   ================================================================ */
 function drawFreezeWall() {
-  const wallY = dangerY - cameraY; // screen Y of the freeze wall
-
-  // Glow gradient above the wall
-  const grad = ctx.createLinearGradient(0, wallY - 40, 0, wallY + 20);
-  grad.addColorStop(0,   'rgba(0,200,255,0)');
-  grad.addColorStop(0.5, 'rgba(0,180,255,0.35)');
-  grad.addColorStop(1,   'rgba(0,240,255,0.75)');
-  ctx.fillStyle = grad;
+  const wallY = dangerY - cameraY;
+  const g     = ctx.createLinearGradient(0, wallY - 40, 0, wallY + 20);
+  g.addColorStop(0,   'rgba(0,200,255,0)');
+  g.addColorStop(0.5, 'rgba(0,180,255,0.35)');
+  g.addColorStop(1,   'rgba(0,240,255,0.75)');
+  ctx.fillStyle = g;
   ctx.fillRect(0, wallY - 40, canvas.width, 60);
 
-  // Solid ice line
   ctx.fillStyle = 'rgba(0,240,255,0.9)';
   ctx.fillRect(0, wallY + 18, canvas.width, 2);
 
-  // Animated icicles
   ctx.fillStyle = '#7ef';
   for (let i = 0; i < 12; i++) {
     const ix = (i / 11) * canvas.width;
@@ -984,12 +1286,11 @@ function drawFreezeWall() {
     ctx.beginPath();
     ctx.moveTo(ix - 6, wallY + 2);
     ctx.lineTo(ix + 6, wallY + 2);
-    ctx.lineTo(ix, wallY + ih);
+    ctx.lineTo(ix,     wallY + ih);
     ctx.closePath();
     ctx.fill();
   }
 
-  // Blinking warning text
   if (Math.floor(Date.now() / 300) % 2 === 0) {
     ctx.fillStyle = '#0ff';
     ctx.font = 'bold 13px Courier New';
@@ -999,9 +1300,9 @@ function drawFreezeWall() {
   }
 }
 
-// ---------------------------------------------------------------------------
-// DRAW — PARTICLES
-// ---------------------------------------------------------------------------
+/* ================================================================
+   27. DRAW — PARTICLES
+   ================================================================ */
 function drawParticles() {
   for (const p of particles) {
     ctx.globalAlpha = p.life;
@@ -1013,46 +1314,59 @@ function drawParticles() {
   ctx.globalAlpha = 1;
 }
 
-// ---------------------------------------------------------------------------
-// DRAW — HUD OVERLAY (danger proximity vignette)
-// ---------------------------------------------------------------------------
+/* ================================================================
+   28. DRAW — HUD  (danger vignette + wall-jump hint)
+   ================================================================ */
 function drawHUD() {
-  const playerScreenY = player.y - cameraY;
-  const wallScreenY   = dangerY  - cameraY;
-  const dist = playerScreenY - wallScreenY;
+  // Danger proximity vignette
+  const psy  = player.y - cameraY;
+  const wsY  = dangerY  - cameraY;
+  const dist = psy - wsY;
   if (dist < 200) {
-    const alpha = 1 - dist / 200;
-    ctx.fillStyle = `rgba(0,200,255,${alpha * 0.18})`;
+    ctx.fillStyle = `rgba(0,200,255,${(1 - dist / 200) * 0.18})`;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
   }
 
-  // Wall-jump hint when touching wall in air
+  // Wall-jump hint
   if ((player.onWallLeft || player.onWallRight || player.wallGrace > 0) && !player.onGround) {
-    ctx.fillStyle = 'rgba(0,255,200,0.7)';
+    ctx.fillStyle = 'rgba(0,255,200,0.75)';
     ctx.font = 'bold 12px Courier New';
     ctx.textAlign = 'center';
-    ctx.fillText('WALL JUMP!', canvas.width / 2, canvas.height * 0.15);
+    ctx.fillText('WALL JUMP!', canvas.width / 2, canvas.height * 0.14);
     ctx.textAlign = 'left';
+  }
+
+  // Joystick outer ring drawn on canvas (complements the CSS nub)
+  if (joy.active && state === 'playing') {
+    const zRect    = jZone.getBoundingClientRect();
+    const cRect    = canvas.getBoundingClientRect();
+    const ox       = (zRect.left - cRect.left) + joy.ox;
+    const oy       = (zRect.top  - cRect.top)  + joy.oy;
+    ctx.save();
+    ctx.globalAlpha = 0.28;
+    ctx.strokeStyle = 'rgba(120,220,255,0.9)';
+    ctx.lineWidth   = 1.5;
+    ctx.beginPath();
+    ctx.arc(ox, oy, joy.RADIUS, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
   }
 }
 
-// ---------------------------------------------------------------------------
-// GAME LOOP
-// ---------------------------------------------------------------------------
+/* ================================================================
+   29. GAME LOOP  (requestAnimationFrame – GPU-synced 60 fps)
+   ================================================================ */
 function loop() {
   update();
-
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   drawBackground();
   for (const p of platforms) drawPlatform(p);
   drawParticles();
-
   if (state === 'playing') {
     drawPlayer();
     drawFreezeWall();
     drawHUD();
   }
-
   requestAnimationFrame(loop);
 }
 
