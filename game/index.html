@@ -749,11 +749,401 @@ document.addEventListener('touchmove', e => e.preventDefault(), { passive: false
 overlay.addEventListener('touchmove', e => e.stopPropagation(), { passive: true });
 
 /* ================================================================
-   8.  GAME STATE
+   8.  PERSISTENCE  (localStorage save system)
+   ================================================================ */
+const SAVE_KEY = 'iceTower_v2';
+
+function loadSave() {
+  try { const s = JSON.parse(localStorage.getItem(SAVE_KEY)); if (s) return s; } catch(e) {}
+  return {};
+}
+let save = Object.assign(
+  { bestScore: 0, bestDepth: 0, totalRuns: 0, totalTime: 0,
+    settings: { sound: true, haptic: true } },
+  loadSave()
+);
+if (!save.settings) save.settings = { sound: true, haptic: true };
+
+function persistSave() {
+  try { localStorage.setItem(SAVE_KEY, JSON.stringify(save)); } catch(e) {}
+}
+
+/* ================================================================
+   8b. WEB AUDIO SYNTHESIZED SOUND EFFECTS
+   ================================================================ */
+let _ac = null;
+function getAC() {
+  if (!_ac) _ac = new (window.AudioContext || window.webkitAudioContext)();
+  if (_ac.state === 'suspended') _ac.resume();
+  return _ac;
+}
+
+function _gain(ac, vol, t0, t1) {
+  const g = ac.createGain();
+  g.gain.setValueAtTime(vol, t0);
+  g.gain.linearRampToValueAtTime(0.0001, t1);
+  g.connect(ac.destination);
+  return g;
+}
+
+/* Jump: 200→420 Hz sine sweep, 0.12s */
+function playJump() {
+  if (!save.settings.sound) return;
+  const ac = getAC(), t = ac.currentTime;
+  const o  = ac.createOscillator();
+  o.type = 'sine';
+  o.frequency.setValueAtTime(200, t);
+  o.frequency.linearRampToValueAtTime(420, t + 0.10);
+  o.connect(_gain(ac, 0.18, t, t + 0.12));
+  o.start(t); o.stop(t + 0.13);
+}
+
+/* Wall jump: 150→500→280 Hz sawtooth, 0.17s */
+function playWallJump() {
+  if (!save.settings.sound) return;
+  const ac = getAC(), t = ac.currentTime;
+  const o  = ac.createOscillator();
+  o.type = 'sawtooth';
+  o.frequency.setValueAtTime(150, t);
+  o.frequency.exponentialRampToValueAtTime(500, t + 0.10);
+  o.frequency.linearRampToValueAtTime(280, t + 0.17);
+  o.connect(_gain(ac, 0.20, t, t + 0.17));
+  o.start(t); o.stop(t + 0.18);
+}
+
+/* Land: sine thud 90→58 Hz + noise burst */
+function playSfxLand() {
+  if (!save.settings.sound) return;
+  const ac = getAC(), t = ac.currentTime;
+  const o  = ac.createOscillator();
+  o.type = 'sine';
+  o.frequency.setValueAtTime(90, t);
+  o.frequency.linearRampToValueAtTime(58, t + 0.06);
+  o.connect(_gain(ac, 0.20, t, t + 0.06));
+  o.start(t); o.stop(t + 0.07);
+  const len = Math.ceil(ac.sampleRate * 0.04);
+  const buf = ac.createBuffer(1, len, ac.sampleRate);
+  const d   = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / len);
+  const src = ac.createBufferSource(); src.buffer = buf;
+  src.connect(_gain(ac, 0.10, t, t + 0.04)); src.start(t);
+}
+
+/* Bounce pad: boing 200→90→240 Hz, 0.22s */
+function playBouncePad() {
+  if (!save.settings.sound) return;
+  const ac = getAC(), t = ac.currentTime;
+  const o  = ac.createOscillator();
+  o.type = 'sine';
+  o.frequency.setValueAtTime(200, t);
+  o.frequency.linearRampToValueAtTime(90, t + 0.10);
+  o.frequency.linearRampToValueAtTime(240, t + 0.20);
+  o.connect(_gain(ac, 0.24, t, t + 0.22));
+  o.start(t); o.stop(t + 0.23);
+}
+
+/* Crumble: 4 noise bursts spaced 45ms apart */
+function playCrumble() {
+  if (!save.settings.sound) return;
+  const ac = getAC(), t = ac.currentTime;
+  for (let b = 0; b < 4; b++) {
+    const dt  = b * 0.045;
+    const len = Math.ceil(ac.sampleRate * 0.03);
+    const buf = ac.createBuffer(1, len, ac.sampleRate);
+    const d   = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / len);
+    const src = ac.createBufferSource(); src.buffer = buf;
+    src.connect(_gain(ac, 0.13 - b * 0.025, t + dt, t + dt + 0.03));
+    src.start(t + dt);
+  }
+}
+
+/* Death: sawtooth 320→40 Hz descent + noise crash */
+function playDeath() {
+  if (!save.settings.sound) return;
+  const ac = getAC(), t = ac.currentTime;
+  const o  = ac.createOscillator();
+  o.type = 'sawtooth';
+  o.frequency.setValueAtTime(320, t);
+  o.frequency.exponentialRampToValueAtTime(40, t + 0.80);
+  o.connect(_gain(ac, 0.30, t, t + 0.85));
+  o.start(t); o.stop(t + 0.90);
+  const len = Math.ceil(ac.sampleRate * 0.6);
+  const buf = ac.createBuffer(1, len, ac.sampleRate);
+  const d   = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.exp(-i / (ac.sampleRate * 0.18));
+  const src = ac.createBufferSource(); src.buffer = buf;
+  src.connect(_gain(ac, 0.25, t, t + 0.60)); src.start(t);
+}
+
+/* Milestone ding: ascending C5-E5-G5 triad, spaced 100ms */
+function playMilestone() {
+  if (!save.settings.sound) return;
+  const ac = getAC(), t = ac.currentTime;
+  [523.25, 659.25, 783.99].forEach((freq, i) => {
+    const dt = i * 0.10;
+    const o  = ac.createOscillator();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(freq, t + dt);
+    o.connect(_gain(ac, 0.17, t + dt, t + dt + 0.28));
+    o.start(t + dt); o.stop(t + dt + 0.30);
+  });
+}
+
+/* ================================================================
+   8c. SEEDED PRNG  (mulberry32 – deterministic, no Math.random in gen)
+   ================================================================ */
+function makePRNG(seed) {
+  let s = (seed >>> 0) || 1;
+  return function() {
+    s += 0x6D2B79F5;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t ^= t + Math.imul(t ^ (t >>> 7), 61 | t);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/* ================================================================
+   8d. SCORE POPUP LAYER
+   ================================================================ */
+const popupLayer = (() => {
+  const el = document.createElement('div');
+  el.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:15;overflow:hidden;';
+  document.body.appendChild(el);
+  return el;
+})();
+let popups = [];
+
+function spawnPopup(x, y, text, color) {
+  const el = document.createElement('div');
+  el.style.cssText = [
+    'position:absolute', 'font-family:Courier New,monospace',
+    'font-size:14px', 'font-weight:bold', 'white-space:nowrap',
+    'transform:translateX(-50%)', 'pointer-events:none',
+    'color:' + color,
+    'text-shadow:0 0 8px ' + color,
+    'left:' + x + 'px', 'top:' + y + 'px'
+  ].join(';');
+  el.textContent = text;
+  popupLayer.appendChild(el);
+  popups.push({ el, x, y, vy: -1.5, life: 1.0 });
+}
+
+function updatePopups() {
+  for (const p of popups) {
+    p.y    += p.vy;
+    p.life -= 0.018;
+    p.el.style.top     = p.y + 'px';
+    p.el.style.opacity = Math.max(0, p.life).toFixed(2);
+  }
+  popups = popups.filter(p => { if (p.life <= 0) { p.el.remove(); return false; } return true; });
+}
+
+/* ================================================================
+   8e. FULL-SCREEN OVERLAY SYSTEM  (menu / pause / results)
+   ================================================================ */
+const uiOverlay = (() => {
+  const el = document.createElement('div');
+  el.style.cssText = [
+    'position:fixed', 'inset:0', 'display:none',
+    'flex-direction:column', 'align-items:center', 'justify-content:center',
+    'gap:14px', 'text-align:center', 'z-index:25',
+    'font-family:Courier New,monospace',
+    'padding:20px env(safe-area-inset-right,0px) 20px env(safe-area-inset-left,0px)'
+  ].join(';');
+  document.body.appendChild(el);
+  return el;
+})();
+
+function showUI(htmlContent, bgColor) {
+  uiOverlay.style.background = bgColor || 'rgba(2,2,22,0.93)';
+  uiOverlay.innerHTML        = htmlContent;
+  uiOverlay.style.display    = 'flex';
+}
+function hideUI() { uiOverlay.style.display = 'none'; }
+
+/* shared button style */
+const BTN = 'style="padding:14px 44px;background:linear-gradient(135deg,#0af,#07f);' +
+            'color:#fff;font-size:1.2em;font-weight:bold;border:none;border-radius:50px;' +
+            'cursor:pointer;letter-spacing:2px;font-family:inherit;' +
+            'box-shadow:0 0 24px rgba(0,170,255,0.45);"';
+const PBTN = 'style="width:200px;padding:12px;border:1px solid rgba(0,200,255,0.4);' +
+             'border-radius:10px;background:rgba(0,80,160,0.45);color:#aef;' +
+             'font-size:0.95em;font-weight:bold;cursor:pointer;font-family:inherit;"';
+
+/* ================================================================
+   8f. MENU SCREEN  (animated background platforms)
+   ================================================================ */
+let menuPlatforms = [];
+function initMenuAnim() {
+  menuPlatforms = Array.from({ length: 16 }, () => ({
+    x: Math.random() * canvas.width,
+    y: Math.random() * canvas.height,
+    w: 55 + Math.random() * 90,
+    spd: 0.4 + Math.random() * 0.8,
+    a:   0.07 + Math.random() * 0.17
+  }));
+}
+
+function drawMenuAnim() {
+  for (const p of menuPlatforms) {
+    p.y += p.spd;
+    if (p.y > canvas.height + 20) { p.y = -18; p.x = Math.random() * canvas.width; }
+    ctx.globalAlpha = p.a;
+    const g = ctx.createLinearGradient(p.x, p.y, p.x, p.y + 13);
+    g.addColorStop(0, '#c0f0ff'); g.addColorStop(1, '#1870c0');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.roundRect(p.x, p.y, p.w, 13, 4); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function showMenu() {
+  state = 'menu';
+  const html = `
+    <h1 style="font-size:2.8em;color:#7ff;letter-spacing:4px;
+               text-shadow:0 0 24px #0ff,0 0 48px #07f;line-height:1.1;
+               animation:icePulse 2s ease-in-out infinite">
+      &#10052; ICE<br>TOWER
+    </h1>
+    <style>@keyframes icePulse{0%,100%{text-shadow:0 0 18px #0ff,0 0 36px #07f}
+      50%{text-shadow:0 0 36px #0ff,0 0 72px #07f,0 0 100px #04a}}</style>
+    <p style="color:#7ad;max-width:270px;line-height:1.6;font-size:0.9em">
+      Wall-jump down the infinite icy tower.<br>How deep can you fall?
+    </p>
+    <div style="background:rgba(0,40,80,0.7);border:1px solid rgba(0,200,255,0.3);
+                border-radius:12px;padding:10px 22px;color:#ffd700;font-size:0.95em" id="menuBestRow">
+      BEST: ${save.bestScore} &nbsp;|&nbsp; DEPTH: ${save.bestDepth}m
+    </div>
+    <button ${BTN} id="menuStartBtn">PLAY</button>
+    <p style="font-size:0.78em;color:#568">Left: joystick &nbsp;|&nbsp; Right: jump &nbsp;|&nbsp; &#9664;&#9654; + SPACE on desktop</p>
+  `;
+  showUI(html, 'rgba(2,2,22,0.90)');
+  document.getElementById('menuStartBtn').addEventListener('click', startGame);
+  document.getElementById('menuStartBtn').addEventListener('touchend', e => { e.preventDefault(); startGame(); }, { passive: false });
+}
+
+/* ================================================================
+   8g. PAUSE SCREEN  (with settings toggles)
+   ================================================================ */
+function showPause() {
+  state = 'paused';
+  const sOn = save.settings.sound  ? 'ON' : 'OFF';
+  const hOn = save.settings.haptic ? 'ON' : 'OFF';
+  const sBg = save.settings.sound  ? '#0af' : '#333';
+  const hBg = save.settings.haptic ? '#0af' : '#333';
+  const html = `
+    <h2 style="font-size:2em;color:#7ff;letter-spacing:3px">PAUSED</h2>
+    <button ${PBTN} id="pResume">RESUME</button>
+    <div style="display:flex;align-items:center;justify-content:space-between;width:200px;color:#adf;font-size:0.9em">
+      <span>&#128266; Sound</span>
+      <button id="pSound" style="width:52px;height:28px;border-radius:14px;border:none;cursor:pointer;
+        font-family:inherit;font-weight:bold;font-size:0.85em;background:${sBg};
+        color:${save.settings.sound ? '#003' : '#777'}">${sOn}</button>
+    </div>
+    <div style="display:flex;align-items:center;justify-content:space-between;width:200px;color:#adf;font-size:0.9em">
+      <span>&#128243; Haptic</span>
+      <button id="pHaptic" style="width:52px;height:28px;border-radius:14px;border:none;cursor:pointer;
+        font-family:inherit;font-weight:bold;font-size:0.85em;background:${hBg};
+        color:${save.settings.haptic ? '#003' : '#777'}">${hOn}</button>
+    </div>
+    <button ${PBTN} id="pQuit" style="background:rgba(120,0,0,0.45);border-color:rgba(255,80,80,0.3);color:#f99">QUIT TO MENU</button>
+  `;
+  showUI(html, 'rgba(0,0,20,0.90)');
+  document.getElementById('pResume').addEventListener('click',  resumeFromPause);
+  document.getElementById('pQuit').addEventListener('click',    () => { showMenu(); });
+  document.getElementById('pSound').addEventListener('click',   () => {
+    save.settings.sound = !save.settings.sound; persistSave(); showPause();
+  });
+  document.getElementById('pHaptic').addEventListener('click',  () => {
+    save.settings.haptic = !save.settings.haptic; persistSave(); showPause();
+  });
+}
+
+function resumeFromPause() { state = 'playing'; hideUI(); }
+
+/* ================================================================
+   8h. RESULTS SCREEN
+   ================================================================ */
+function showResults() {
+  const elapsed  = Math.floor((Date.now() - _sessionStart) / 1000);
+  const depthM   = Math.floor(_depth / 10);
+  const newScore = score > save.bestScore;
+  const newDepth = depthM > save.bestDepth;
+  if (newScore) save.bestScore = score;
+  if (newDepth) save.bestDepth = depthM;
+  save.totalRuns++;
+  save.totalTime += elapsed;
+  persistSave();
+
+  const mins = String(Math.floor(elapsed / 60)).padStart(2, '0');
+  const secs = String(elapsed % 60).padStart(2, '0');
+
+  function rrow(label, value, highlight) {
+    const vc = highlight ? 'color:#ffd700;text-shadow:0 0 8px #fa0' : 'color:#cef';
+    return `<span style="color:#789;text-align:right">${label}</span>` +
+           `<span style="font-weight:bold;${vc}">${value}${highlight ? ' &#9733;' : ''}</span>`;
+  }
+
+  const html = `
+    <h2 style="font-size:1.8em;color:#7ff;letter-spacing:3px">RESULTS</h2>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 18px;
+                background:rgba(0,30,60,0.6);border:1px solid rgba(0,200,255,0.25);
+                border-radius:14px;padding:14px 20px;font-size:0.85em">
+      ${rrow('SCORE',  score,  newScore)}
+      ${rrow('DEPTH',  depthM + 'm', newDepth)}
+      ${rrow('TIME',   mins + ':' + secs, false)}
+      ${rrow('BEST COMBO', _peakCombo > 0 ? 'x' + _peakCombo : '-', false)}
+      ${rrow('ALL-TIME BEST', save.bestScore, false)}
+      ${rrow('DEEPEST EVER', save.bestDepth + 'm', false)}
+    </div>
+    <button ${BTN} id="rPlay">PLAY AGAIN</button>
+    <button id="rShare" style="padding:10px 30px;background:linear-gradient(135deg,#2a7,#0a5);
+      color:#fff;font-size:0.9em;font-weight:bold;border:none;border-radius:50px;cursor:pointer;font-family:inherit">
+      &#128279; SHARE
+    </button>
+    <button ${PBTN} id="rMenu">MAIN MENU</button>
+  `;
+  state = 'results';
+  showUI(html, 'rgba(2,2,22,0.93)');
+  document.getElementById('rPlay').addEventListener('click',  startGame);
+  document.getElementById('rMenu').addEventListener('click',  showMenu);
+  document.getElementById('rShare').addEventListener('click', () => {
+    const txt = 'I fell ' + depthM + 'm in Ice Tower! Score: ' + score + '. Beat me!';
+    const btn = document.getElementById('rShare');
+    if (navigator.share) { navigator.share({ title: 'Ice Tower', text: txt }).catch(() => {}); }
+    else { try { navigator.clipboard.writeText(txt); } catch(e) {}
+           btn.textContent = 'Copied!'; setTimeout(() => { btn.textContent = '&#128279; SHARE'; }, 1500); }
+  });
+}
+
+/* ================================================================
+   8i. PAUSE BUTTON (in-game)
+   ================================================================ */
+const pauseBtn = (() => {
+  const el = document.createElement('div');
+  el.style.cssText = [
+    'position:fixed', 'top:calc(env(safe-area-inset-top,0px) + 46px)', 'right:14px',
+    'width:36px', 'height:36px', 'border-radius:8px',
+    'border:1px solid rgba(120,220,255,0.38)',
+    'background:rgba(0,60,120,0.55)',
+    'color:#7ff', 'font-size:0.9em',
+    'display:none', 'align-items:center', 'justify-content:center',
+    'cursor:pointer', 'z-index:12', 'backdrop-filter:blur(4px)',
+    'user-select:none'
+  ].join(';');
+  el.innerHTML = '&#9646;&#9646;';
+  document.body.appendChild(el);
+  el.addEventListener('click',    () => { if (state === 'playing') showPause(); else if (state === 'paused') resumeFromPause(); });
+  el.addEventListener('touchend', e => { e.preventDefault(); if (state === 'playing') showPause(); else if (state === 'paused') resumeFromPause(); }, { passive: false });
+  return el;
+})();
+
+/* ================================================================
+   9.  GAME STATE VARIABLES
    ================================================================ */
 let state      = 'menu';
 let score      = 0;
-let best       = parseInt(localStorage.getItem('iceTowerBest') || '0');
 let cameraY    = 0;
 let platforms  = [];
 let particles  = [];
@@ -761,74 +1151,162 @@ let player;
 let frameCount = 0;
 let dangerY    = -200;
 
-bestEl.textContent = best;
+/* Scoring extras */
+let _depth       = 0;   // pixel depth (positive = deeper)
+let _combo       = 0;
+let _comboTimer  = 0;
+let _peakCombo   = 0;
+let _sessionStart = 0;
+let _nextMilestone = 100;  // depth-meters for next milestone sound
+let _lastSafeZone  = -1;   // last safe-zone index generated
+
+/* Slow-motion death */
+let _dyingTimer  = 0;   // frames until results screen
+let _slowMo      = false;
+const SLOW_FACTOR = 0.20;
+
+/* Seeded RNG for level generation */
+let _rng = Math.random;  // replaced on initGame
 
 /* ================================================================
-   9.  HELPERS
+   9b. COMBO SCORING HELPERS
+   ================================================================ */
+function onPlatformLand(type) {
+  _combo = Math.min(_combo + 1, 4);
+  _comboTimer = 130;
+  if (_combo > _peakCombo) _peakCombo = _combo;
+
+  if (_combo >= 2) {
+    const pts  = 10 * _combo;
+    const psx  = player.x + PLAYER_W / 2;
+    const psy  = player.y - cameraY - 28;
+    const cols = ['', '', '#ffcc00', '#ff9900', '#ff3300'];
+    spawnPopup(psx, psy, '+' + pts + ' COMBO x' + _combo, cols[_combo]);
+    if (save.settings.haptic) { try { navigator.vibrate(10 + _combo * 5); } catch(e) {} }
+  }
+}
+
+function computeScore() {
+  const base = _depth / 10;
+  // Speed bonus: falling faster than average camera scroll rate
+  const avgDepthPx = frameCount * SCROLL_SPEED_BASE * 10;
+  const speedMult  = _depth > avgDepthPx ? 1.3 : 1.0;
+  // Combo multiplier: 1x–4x, blended at 50% weight
+  const comboMult  = 1 + ((_combo / 4) * 3);
+  return Math.floor(base * speedMult * (1 + (comboMult - 1) * 0.5));
+}
+
+/* ================================================================
+   9c. HELPERS
    ================================================================ */
 function lerp(a, b, t) { return a + (b - a) * t; }
 
 /* ================================================================
-   10. PARTICLES
+   10. PARTICLES  (seeded)
    ================================================================ */
-function spawnParticles(x, y, color, n = 6) {
+function spawnParticles(x, y, color, n, upward) {
   for (let i = 0; i < n; i++) {
+    const a = upward
+      ? (-Math.PI / 2 + (_rng() - 0.5) * Math.PI)
+      : _rng() * Math.PI * 2;
+    const spd = 1.5 + _rng() * 3.5;
     particles.push({
-      x, y,
-      vx: (Math.random() - 0.5) * 4,
-      vy: (Math.random() - 2) * 3,
-      life: 1,
-      decay: 0.04 + Math.random() * 0.04,
-      r: 2 + Math.random() * 3,
-      color
+      x, y, color,
+      vx: Math.cos(a) * spd, vy: Math.sin(a) * spd,
+      life: 1, decay: 0.03 + _rng() * 0.04, r: 2 + _rng() * 3
     });
   }
 }
 
 /* ================================================================
-   11. PLATFORM GENERATION  (gap grows with score)
+   11. PROCEDURAL LEVEL GENERATION  (seeded PRNG, reachability guaranteed)
+   ================================================================
+   Player max air time ≈ 2 * |JUMP_FORCE| / GRAVITY = 2*11/0.45 ≈ 49 frames
+   Max horizontal reach: MAX_RUN_SPEED * 49 ≈ 294px → conservative 300px.
+   Each new platform center is constrained within ±MAX_REACH_X of the
+   previous anchor center, guaranteeing every step is beatable.
    ================================================================ */
-function currentGap() {
-  return lerp(PLATFORM_GAP_START, PLATFORM_GAP_MAX, Math.min(score / SCORE_GAP_THRESHOLD, 1));
+const MAX_REACH_X        = 300;
+const SAFE_ZONE_INTERVAL = 500;   // score-meters between safe zones
+const PLAT_MIN_W         = 55;
+const PLAT_MAX_W         = 130;
+
+function currentGap(ds) {
+  // 80–100px near surface, widens to 140–160px at depth 1000m+
+  return 80 + Math.min(ds / 1000, 1) * 60 + _rng() * 20;
+}
+
+function buildPlatform(x, y, w, type) {
+  return {
+    x, y, w, h: PLATFORM_H, type,
+    crumbled: false, crumbleTimer: 0, firstTouch: true,
+    moveDir: _rng() < 0.5 ? 1 : -1,
+    moveRange: 55 + _rng() * 80,
+    moveOrigin: x
+  };
 }
 
 function generatePlatforms(fromY, toY) {
-  let y = fromY;
+  let y       = fromY;
+  let anchors = platforms.filter(p => Math.abs(p.y - fromY) < 220).map(p => ({ x: p.x, w: p.w }));
+  if (anchors.length === 0) anchors = [{ x: canvas.width / 2 - 70, w: 140 }];
+
   while (y > toY) {
-    const w    = 60 + Math.random() * 90;
-    const x    = Math.random() * (canvas.width - w);
-    const type = Math.random() < 0.12 ? 'bounce'
-               : Math.random() < 0.10 ? 'crumble'
-               : 'normal';
-    platforms.push({ x, y, w, h: PLATFORM_H, type, crumbled: false, crumbleTimer: 0 });
-    y -= currentGap() + Math.random() * 40;
+    const ds = Math.max(0, Math.floor((-y + canvas.height * 0.4) / 10));
+
+    // Safe zone: dense cluster every SAFE_ZONE_INTERVAL score-meters
+    const szIdx = Math.floor(ds / SAFE_ZONE_INTERVAL);
+    if (szIdx > _lastSafeZone && ds > 0) {
+      _lastSafeZone = szIdx;
+      const sw   = 118;
+      const cols = [0.08, 0.38, 0.62, 0.20];
+      const na   = [];
+      for (let i = 0; i < 4; i++) {
+        const py = y - i * 65;
+        const px = Math.max(0, Math.min(canvas.width - sw, cols[i] * canvas.width));
+        platforms.push(buildPlatform(px, py, sw, 'normal'));
+        na.push({ x: px, w: sw });
+      }
+      anchors = na;
+      y -= 65 * 4 + 55;
+      continue;
+    }
+
+    const gap    = currentGap(ds);
+    const anchor = anchors[Math.floor(_rng() * anchors.length)];
+    const platW  = PLAT_MIN_W + Math.floor(_rng() * (PLAT_MAX_W - PLAT_MIN_W));
+    const acx    = anchor.x + anchor.w / 2;
+
+    // Reachability constraint: new platform center within ±MAX_REACH_X of anchor
+    const minX  = Math.max(0, acx - MAX_REACH_X - platW * 0.5);
+    const maxX  = Math.min(canvas.width - platW, acx + MAX_REACH_X - platW * 0.5);
+    const platX = minX + _rng() * Math.max(0, maxX - minX);
+
+    // Type: moving unlocks after depth 200, distribution is depth-aware
+    let type = 'normal';
+    const r  = _rng();
+    if (ds > 200 && r < 0.09)     type = 'moving';
+    else if (ds > 50 && r < 0.19) type = 'crumble';
+    else if (r < 0.27)             type = 'bounce';
+
+    platforms.push(buildPlatform(platX, y, platW, type));
+    anchors = [{ x: platX, w: platW }];
+    y -= gap;
   }
 }
 
-/* ================================================================
-   12. GAME INIT
-   ================================================================ */
-function initGame() {
-  score = 0; frameCount = 0; cameraY = 0; dangerY = -200;
-  platforms = []; particles = [];
-  joyLeft = joyRight = false; jumpHeld = false;
-
-  platforms.push({
-    x: canvas.width / 2 - 70, y: canvas.height * 0.4,
-    w: 140, h: PLATFORM_H, type: 'normal', crumbled: false, crumbleTimer: 0
-  });
-  generatePlatforms(canvas.height * 0.4 - PLATFORM_GAP_START, -10000);
-
-  player = {
-    x: canvas.width / 2 - PLAYER_W / 2,
-    y: canvas.height * 0.4 - PLAYER_H - 2,
-    vx: 0, vy: 0,
-    onGround: false, coyoteTime: 0,
-    jumpBuffer: 0, jumpHeld: false, jumpActive: false,
-    onWallLeft: false, onWallRight: false,
-    wallGrace: 0, lastWallDir: 0,
-    dir: 1, frame: 0, frameTimer: 0
-  };
+function updateMovingPlatforms() {
+  const ds = Math.max(0, Math.floor(_depth / 10));
+  if (ds < 200) return;
+  const spd = 0.8 + (ds - 200) / 800;
+  for (const p of platforms) {
+    if (p.type !== 'moving' || p.crumbled) continue;
+    p.x += p.moveDir * spd;
+    const lo = Math.max(0, p.moveOrigin - p.moveRange * 0.5);
+    const hi = Math.min(canvas.width - p.w, p.moveOrigin + p.moveRange);
+    if (p.x >= hi) { p.x = hi; p.moveDir = -1; }
+    if (p.x <= lo) { p.x = lo; p.moveDir =  1; }
+  }
 }
 
 /* ================================================================
@@ -860,16 +1338,19 @@ function sweepAxis(axis, delta) {
 
           if (plat.type === 'bounce') {
             player.vy = JUMP_FORCE * 1.3;
-            spawnParticles(player.x + PLAYER_W / 2, plat.y, '#fa0', 10);
-            Haptic.bounce();
+            spawnParticles(player.x + PLAYER_W / 2, plat.y, '#fa0', 10, true);
+            playBouncePad(); Haptic.bounce();
+            if (plat.firstTouch) { plat.firstTouch = false; onPlatformLand('bounce'); }
           } else if (plat.type === 'crumble') {
+            if (plat.firstTouch) { plat.firstTouch = false; playCrumble(); onPlatformLand('crumble'); }
             plat.crumbleTimer++;
             if (plat.crumbleTimer > 20) {
               plat.crumbled = true;
-              spawnParticles(plat.x + plat.w / 2, plat.y, '#f44', 12);
+              spawnParticles(plat.x + plat.w / 2, plat.y, '#f44', 14, false);
             }
           } else {
-            spawnParticles(player.x + PLAYER_W / 2, plat.y + 2, '#aef', 2);
+            if (plat.firstTouch) { plat.firstTouch = false; onPlatformLand(plat.type); }
+            if (_rng() < 0.35) spawnParticles(player.x + PLAYER_W / 2, plat.y + 2, '#aef', 3, false);
           }
         } else if (penUp < penDown && step < 0) {
           // Ceiling hit
@@ -949,9 +1430,10 @@ function tryWallJump() {
   spawnParticles(
     wallDir === -1 ? 2 : canvas.width - 4,
     player.y + PLAYER_H * 0.5,
-    '#0ff', 8
+    '#0ff', 8, true
   );
-  Haptic.wallJump();
+  playWallJump(); Haptic.wallJump();
+  onPlatformLand('wall');
   return true;
 }
 
@@ -968,8 +1450,8 @@ function tryNormalJump() {
   player.jumpActive = true;
   player.jumpHeld   = jumpHeld;
 
-  spawnParticles(player.x + PLAYER_W / 2, player.y + PLAYER_H, '#7ff', 8);
-  Haptic.jump();
+  spawnParticles(player.x + PLAYER_W / 2, player.y + PLAYER_H, '#7ff', 8, true);
+  playJump(); Haptic.jump();
   return true;
 }
 
@@ -986,17 +1468,7 @@ function applyVariableJump() {
   if (player.vy >= 0) player.jumpActive = false;
 }
 
-/* ================================================================
-   19. CAMERA + DANGER WALL
-   ================================================================ */
-function updateCamera() {
-  const target = player.y - canvas.height * 0.38;
-  if (target < cameraY) cameraY = target;
-
-  const autoScroll = SCROLL_SPEED_BASE + frameCount * 0.001;
-  cameraY -= autoScroll;
-  dangerY  = cameraY - 60;
-}
+/* updateCamera is defined in section 20b, after the physics helpers */
 
 function isDead() {
   return player.y < dangerY + PLAYER_H ||
@@ -1004,68 +1476,107 @@ function isDead() {
 }
 
 /* ================================================================
-   20. MAIN PHYSICS UPDATE  (called once per rAF)
+   20. MAIN UPDATE  (handles playing + dying states)
    ================================================================ */
 function update() {
+  // --- Dying state: slow-motion then show results ---
+  if (state === 'dying') {
+    _dyingTimer--;
+    if (_dyingTimer <= 0) { showResults(); return; }
+    runPhysicsStep(SLOW_FACTOR);
+    return;
+  }
+
   if (state !== 'playing') return;
   frameCount++;
 
+  runPhysicsStep(1.0);
+
+  // Combo decay
+  if (_comboTimer > 0) { _comboTimer--; if (_comboTimer === 0) { _combo = 0; } }
+
+  // HUD
+  score = computeScore();
+  scoreEl.textContent = score;
+  bestEl.textContent  = save.bestScore;
+
+  // Depth display (reuse bestEl position or add depth to score HUD)
+  const depthM = Math.floor(_depth / 10);
+  // Show depth milestones
+  if (depthM >= _nextMilestone) {
+    playMilestone();
+    spawnPopup(canvas.width / 2, canvas.height * 0.35, _nextMilestone + 'm!', '#00ffff');
+    _nextMilestone += 100;
+  }
+
+  // Popups
+  updatePopups();
+}
+
+function runPhysicsStep(dt) {
   const goLeft  = keys.left  || joyLeft;
   const goRight = keys.right || joyRight;
-  const mag     = joy.active ? joyMag : 1; // proportional speed from joystick
+  const mag     = joy.active ? joyMag : 1;
 
-  if (goLeft)  { player.vx -= RUN_ACCEL * mag; player.dir = -1; }
-  if (goRight) { player.vx += RUN_ACCEL * mag; player.dir =  1; }
+  if (goLeft)  { player.vx -= RUN_ACCEL * mag * dt; player.dir = -1; }
+  if (goRight) { player.vx += RUN_ACCEL * mag * dt; player.dir =  1; }
 
   const friction = player.onGround ? GROUND_FRICTION : AIR_FRICTION;
-  player.vx = Math.max(-MAX_RUN_SPEED, Math.min(MAX_RUN_SPEED, player.vx * friction));
+  player.vx = Math.max(-MAX_RUN_SPEED, Math.min(MAX_RUN_SPEED, player.vx * Math.pow(friction, dt)));
 
-  player.vy += GRAVITY;
+  player.vy += GRAVITY * dt;
   player.vy  = Math.min(player.vy, MAX_FALL_SPEED);
 
   applyWallSlide();
   applyVariableJump();
 
-  if (player.onGround)           player.coyoteTime = COYOTE_FRAMES;
-  else if (player.coyoteTime > 0) player.coyoteTime--;
-  if (player.jumpBuffer > 0)      player.jumpBuffer--;
+  if (player.onGround)            player.coyoteTime = COYOTE_FRAMES;
+  else if (player.coyoteTime > 0) player.coyoteTime = Math.max(0, player.coyoteTime - dt);
+  if (player.jumpBuffer > 0)      player.jumpBuffer = Math.max(0, player.jumpBuffer - dt);
 
   if (player.jumpBuffer > 0) {
     if (!tryWallJump()) tryNormalJump();
   }
 
-  // Haptic: landing
   const wasOnGround = player.onGround;
   player.onGround   = false;
 
-  const cX = sweepAxis('x', player.vx);
-  const cY = sweepAxis('y', player.vy);
+  sweepAxis('x', player.vx * dt);
+  const cY = sweepAxis('y', player.vy * dt);
 
   if (cY.landed) {
     player.onGround = true;
-    if (!wasOnGround) Haptic.land();
+    if (!wasOnGround) {
+      playSfxLand();
+      Haptic.land();
+    }
   }
 
   resolveWalls();
-  updateCamera();
+  updateCamera(dt);
 
-  score = Math.max(score, Math.floor((-player.y + canvas.height * 0.4) / 10));
-  scoreEl.textContent = score;
+  // Depth tracking
+  const rawDepth = -(player.y - canvas.height * 0.4);
+  if (rawDepth > _depth) _depth = rawDepth;
+
+  // Moving platforms
+  updateMovingPlatforms();
 
   // Generate platforms ahead
-  const lowestY = Math.min(...platforms.map(p => p.y));
+  const lowestY = platforms.reduce((m, p) => Math.min(m, p.y), Infinity);
   if (lowestY > cameraY - canvas.height * 2) {
-    generatePlatforms(lowestY - currentGap(), cameraY - canvas.height * 3);
+    generatePlatforms(lowestY - 90, cameraY - canvas.height * 3);
   }
 
   // Cull off-screen platforms
   platforms = platforms.filter(p =>
-    p.y < cameraY + canvas.height + 100 && p.y > cameraY - canvas.height * 2.5
+    p.y < cameraY + canvas.height + 100 &&
+    p.y > dangerY - 80
   );
 
-  // Particle update
+  // Particles
   for (const p of particles) {
-    p.x += p.vx; p.y += p.vy; p.vy += 0.15; p.life -= p.decay;
+    p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 0.15 * dt; p.life -= p.decay * dt;
   }
   particles = particles.filter(p => p.life > 0);
 
@@ -1079,33 +1590,72 @@ function update() {
 }
 
 /* ================================================================
-   21. DEATH
+   20b. CAMERA  (accepts dt for slow-mo compatibility)
    ================================================================ */
-function triggerDeath() {
-  Haptic.death();
-  state = 'menu';
-  if (score > best) {
-    best = score;
-    localStorage.setItem('iceTowerBest', best);
-    bestEl.textContent   = best;
-    finalScore.textContent = 'YENI REKOR: ' + score;
-  } else {
-    finalScore.textContent = 'SKOR: ' + score + '  |  EN IYI: ' + best;
-  }
-  startBtn.textContent  = 'TEKRAR';
-  overlay.style.display = 'flex';
+function updateCamera(dt) {
+  const target = player.y - canvas.height * 0.38;
+  if (target < cameraY) cameraY = target;
+  const autoScroll = (SCROLL_SPEED_BASE + frameCount * 0.001) * (dt || 1);
+  cameraY -= autoScroll;
+  dangerY  = cameraY - 60;
 }
 
 /* ================================================================
-   22. START / RESTART
+   21. DEATH  (triggers slow-mo then results)
    ================================================================ */
-function startGame() {
-  initGame();
-  state                = 'playing';
-  overlay.style.display = 'none';
+function triggerDeath() {
+  if (state === 'dying') return;
+  state = 'dying';
+  _dyingTimer = 90;  // ~1.5s at real rate (during slow-mo it's visual only)
+  playDeath();
+  Haptic.death();
+  spawnParticles(player.x + PLAYER_W / 2, player.y + PLAYER_H / 2, '#7ff', 18, true);
+  spawnParticles(player.x + PLAYER_W / 2, player.y + PLAYER_H / 2, '#fff', 10, false);
 }
 
-startBtn.addEventListener('click', startGame);
+/* ================================================================
+   22. START / RESTART  +  INIT
+   ================================================================ */
+function initGame() {
+  // Fresh seed for deterministic-but-varied generation
+  _rng  = makePRNG((Date.now() ^ Math.floor(Math.random() * 0xFFFF)) & 0xFFFFFF);
+
+  score = 0; frameCount = 0; cameraY = 0; dangerY = -200;
+  _depth = 0; _combo = 0; _comboTimer = 0; _peakCombo = 0;
+  _nextMilestone = 100; _lastSafeZone = -1;
+  _sessionStart = Date.now();
+
+  platforms = []; particles = []; popups = [];
+  joyLeft = joyRight = false; jumpHeld = false;
+
+  platforms.push(buildPlatform(canvas.width / 2 - 70, canvas.height * 0.4, 140, 'normal'));
+  generatePlatforms(canvas.height * 0.4 - 90, -canvas.height * 3);
+
+  player = {
+    x: canvas.width / 2 - PLAYER_W / 2,
+    y: canvas.height * 0.4 - PLAYER_H - 2,
+    vx: 0, vy: 0,
+    onGround: false, coyoteTime: 0,
+    jumpBuffer: 0, jumpHeld: false, jumpActive: false,
+    onWallLeft: false, onWallRight: false,
+    wallGrace: 0, lastWallDir: 0,
+    dir: 1, frame: 0, frameTimer: 0
+  };
+
+  // Clear popup DOM
+  popupLayer.innerHTML = '';
+}
+
+function startGame() {
+  getAC();   // unlock audio on user gesture
+  initGame();
+  state = 'playing';
+  hideUI();
+  pauseBtn.style.display = 'flex';
+  overlay.style.display  = 'none';
+}
+
+startBtn.addEventListener('click',    startGame);
 startBtn.addEventListener('touchend', e => { e.preventDefault(); startGame(); }, { passive: false });
 
 /* ================================================================
@@ -1185,7 +1735,19 @@ function drawPlatform(p) {
       ctx.stroke();
     }
 
+  } else if (p.type === 'moving') {
+    // Cyan-green moving platform with directional arrows
+    const g = ctx.createLinearGradient(p.x, sy - p.h, p.x, sy + p.h * 2);
+    g.addColorStop(0, '#80ffcc'); g.addColorStop(0.5, '#30b080'); g.addColorStop(1, '#107050');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.roundRect(p.x, sy - p.h / 2, p.w, p.h, 5); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.38)';
+    ctx.beginPath(); ctx.roundRect(p.x + 4, sy - p.h / 2 + 2, p.w - 8, p.h / 2 - 1, 3); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.7)'; ctx.font = '9px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText(p.moveDir > 0 ? '>' : '<', p.x + p.w / 2, sy + p.h / 2 - 1); ctx.textAlign = 'left';
+
   } else {
+    // Normal ice platform
     const g = ctx.createLinearGradient(p.x, sy - p.h, p.x, sy + p.h * 2);
     g.addColorStop(0, '#b8f0ff'); g.addColorStop(0.4, '#60c8f0'); g.addColorStop(1, '#2080c0');
     ctx.fillStyle = g;
@@ -1315,40 +1877,64 @@ function drawParticles() {
 }
 
 /* ================================================================
-   28. DRAW — HUD  (danger vignette + wall-jump hint)
+   28. DRAW — HUD  (score strip + depth + combo + vignette + hints)
    ================================================================ */
 function drawHUD() {
-  // Danger proximity vignette
+  // Danger proximity cyan vignette
   const psy  = player.y - cameraY;
   const wsY  = dangerY  - cameraY;
   const dist = psy - wsY;
-  if (dist < 200) {
-    ctx.fillStyle = `rgba(0,200,255,${(1 - dist / 200) * 0.18})`;
+  if (dist < 220) {
+    ctx.fillStyle = 'rgba(0,200,255,' + ((1 - dist / 220) * 0.18) + ')';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
   }
+
+  // Score + depth strip at top (below safe-area)
+  const hudH = 42;
+  ctx.fillStyle = 'rgba(0,0,30,0.75)';
+  ctx.fillRect(0, 0, canvas.width, hudH);
+
+  ctx.font = 'bold 13px Courier New'; ctx.fillStyle = '#ff7';
+  ctx.textAlign = 'left';
+  ctx.fillText('SCORE ' + score, 10, 16);
+
+  ctx.fillStyle = '#7ff'; ctx.textAlign = 'center';
+  ctx.fillText(Math.floor(_depth / 10) + 'm', canvas.width / 2, 16);
+
+  ctx.fillStyle = '#adf'; ctx.textAlign = 'right';
+  ctx.fillText('BEST ' + save.bestScore, canvas.width - 10, 16);
+
+  // Combo display
+  if (_combo >= 2) {
+    const cols = ['', '', '#ffcc00', '#ff9900', '#ff3300'];
+    ctx.font = 'bold 14px Courier New';
+    ctx.fillStyle = cols[_combo] || '#ffd700';
+    ctx.textAlign = 'center';
+    ctx.shadowColor = cols[_combo]; ctx.shadowBlur = 8;
+    ctx.fillText('x' + _combo + ' COMBO', canvas.width / 2, 36);
+    ctx.shadowBlur = 0;
+  }
+
+  ctx.textAlign = 'left';
 
   // Wall-jump hint
   if ((player.onWallLeft || player.onWallRight || player.wallGrace > 0) && !player.onGround) {
     ctx.fillStyle = 'rgba(0,255,200,0.75)';
-    ctx.font = 'bold 12px Courier New';
-    ctx.textAlign = 'center';
+    ctx.font = 'bold 12px Courier New'; ctx.textAlign = 'center';
     ctx.fillText('WALL JUMP!', canvas.width / 2, canvas.height * 0.14);
     ctx.textAlign = 'left';
   }
 
   // Joystick outer ring drawn on canvas (complements the CSS nub)
-  if (joy.active && state === 'playing') {
-    const zRect    = jZone.getBoundingClientRect();
-    const cRect    = canvas.getBoundingClientRect();
-    const ox       = (zRect.left - cRect.left) + joy.ox;
-    const oy       = (zRect.top  - cRect.top)  + joy.oy;
+  if (joy.active && (state === 'playing' || state === 'dying')) {
+    const zRect = jZone.getBoundingClientRect();
+    const cRect = canvas.getBoundingClientRect();
+    const ox    = (zRect.left - cRect.left) + joy.ox;
+    const oy    = (zRect.top  - cRect.top)  + joy.oy;
     ctx.save();
     ctx.globalAlpha = 0.28;
-    ctx.strokeStyle = 'rgba(120,220,255,0.9)';
-    ctx.lineWidth   = 1.5;
-    ctx.beginPath();
-    ctx.arc(ox, oy, joy.RADIUS, 0, Math.PI * 2);
-    ctx.stroke();
+    ctx.strokeStyle = 'rgba(120,220,255,0.9)'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(ox, oy, joy.RADIUS, 0, Math.PI * 2); ctx.stroke();
     ctx.restore();
   }
 }
@@ -1359,17 +1945,30 @@ function drawHUD() {
 function loop() {
   update();
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  drawBackground();
-  for (const p of platforms) drawPlatform(p);
-  drawParticles();
-  if (state === 'playing') {
-    drawPlayer();
-    drawFreezeWall();
-    drawHUD();
+
+  if (state === 'menu') {
+    // Draw animated falling platform background behind menu overlay
+    drawBackground();
+    drawMenuAnim();
+  } else {
+    drawBackground();
+    for (const p of platforms) drawPlatform(p);
+    drawParticles();
+    if (state === 'playing' || state === 'dying') {
+      drawPlayer();
+      drawFreezeWall();
+      drawHUD();
+    }
   }
+
   requestAnimationFrame(loop);
 }
 
+/* ================================================================
+   30. BOOT
+   ================================================================ */
+initMenuAnim();
+showMenu();
 loop();
 </script>
 </body>
