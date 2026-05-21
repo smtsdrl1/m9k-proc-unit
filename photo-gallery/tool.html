@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Galeri Oluşturucu</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Segoe UI',sans-serif;background:#0f0f0f;color:#eee;min-height:100vh;padding:24px 16px}
+h1{text-align:center;font-size:1.6rem;margin-bottom:24px;color:#fff;letter-spacing:-0.5px}
+.container{max-width:960px;margin:0 auto}
+
+/* Config */
+.config-box{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:14px;padding:20px;margin-bottom:20px;display:flex;gap:16px;flex-wrap:wrap;align-items:flex-end}
+.config-box label{font-size:.8rem;color:#888;display:block;margin-bottom:6px}
+.config-box input{background:#111;border:1px solid #333;border-radius:8px;color:#fff;padding:10px 14px;font-size:.95rem;width:100%}
+.config-box input:focus{outline:none;border-color:#6c63ff}
+.field{flex:1;min-width:200px}
+
+/* Drop zone */
+.drop-zone{border:2px dashed #333;border-radius:16px;padding:48px 20px;text-align:center;cursor:pointer;transition:all .2s;background:#111;margin-bottom:20px}
+.drop-zone:hover,.drop-zone.drag-over{border-color:#6c63ff;background:#16122a}
+.drop-zone p{color:#666;margin-bottom:12px;font-size:.95rem}
+.drop-zone p.big{font-size:1.1rem;color:#aaa;margin-bottom:8px}
+.pick-btn{background:#6c63ff;color:#fff;border:none;padding:10px 24px;border-radius:8px;font-size:.95rem;cursor:pointer;transition:background .15s}
+.pick-btn:hover{background:#5a52e0}
+
+/* Progress */
+.progress-section{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:14px;padding:20px;margin-bottom:20px}
+.progress-section h3{font-size:.95rem;margin-bottom:14px;color:#aaa}
+.progress-item{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #222;font-size:.85rem}
+.progress-item:last-child{border-bottom:none}
+.progress-item .fname{color:#ccc;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-right:12px}
+.status-badge{padding:3px 10px;border-radius:20px;font-size:.75rem;font-weight:600;white-space:nowrap}
+.status-wait{background:#222;color:#666}
+.status-proc{background:#2a2040;color:#a78bfa;animation:pulse 1.4s infinite}
+.status-done{background:#0d2b1a;color:#34d399}
+.status-err{background:#2b0d0d;color:#f87171}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+
+/* Gallery */
+.gallery-section{margin-bottom:20px}
+.gallery-section h3{font-size:.95rem;color:#aaa;margin-bottom:14px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:16px}
+.card{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:14px;overflow:hidden;transition:transform .2s,box-shadow .2s}
+.card:hover{transform:translateY(-3px);box-shadow:0 8px 24px rgba(108,99,255,.2)}
+.img-wrap{background:repeating-conic-gradient(#222 0% 25%,#1a1a1a 0% 50%) 0 0/20px 20px;height:200px;display:flex;align-items:center;justify-content:center;padding:12px}
+.img-wrap img{max-width:100%;max-height:176px;object-fit:contain;filter:drop-shadow(0 4px 12px rgba(0,0,0,.5))}
+.card-footer{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;border-top:1px solid #222}
+.price{font-weight:700;font-size:1.1rem;color:#fff}
+.order-btn{background:#6c63ff;color:#fff;text-decoration:none;padding:7px 14px;border-radius:8px;font-size:.8rem;font-weight:600;transition:background .15s;cursor:pointer;border:none}
+.order-btn:hover{background:#5a52e0}
+
+/* Export */
+.export-bar{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:14px;padding:16px 20px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.export-bar p{color:#888;font-size:.9rem}
+.export-btn{background:#22c55e;color:#fff;border:none;padding:12px 28px;border-radius:10px;font-size:.95rem;font-weight:700;cursor:pointer;transition:background .15s}
+.export-btn:hover{background:#16a34a}
+.export-btn:disabled{background:#333;color:#555;cursor:not-allowed}
+
+.notice{background:#1a1208;border:1px solid #3a2a00;border-radius:10px;padding:12px 16px;font-size:.82rem;color:#fbbf24;margin-bottom:20px;line-height:1.5}
+
+@media(max-width:500px){.grid{grid-template-columns:repeat(2,1fr);gap:10px}.img-wrap{height:140px}}
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>3D Baskı Galeri Oluşturucu</h1>
+
+  <div class="notice">
+    ⚡ İlk kullanımda yapay zeka modeli (~50 MB) indirilir — bu sadece bir kez olur. İndirme sırasında sayfayı kapatma.
+  </div>
+
+  <div class="config-box">
+    <div class="field">
+      <label>WordPress Sipariş Linki</label>
+      <input type="url" id="wp-url" placeholder="https://siteniz.com/siparis">
+    </div>
+    <div class="field" style="max-width:140px">
+      <label>Fiyat (₺)</label>
+      <input type="number" id="price" value="300">
+    </div>
+  </div>
+
+  <div class="drop-zone" id="drop-zone">
+    <p class="big">Fotoğrafları buraya sürükle & bırak</p>
+    <p>veya</p>
+    <button class="pick-btn" onclick="document.getElementById('file-input').click()">Dosya Seç</button>
+    <input type="file" id="file-input" multiple accept="image/*" style="display:none">
+  </div>
+
+  <div class="progress-section" id="progress-section" style="display:none">
+    <h3>İşlem Durumu</h3>
+    <div id="progress-list"></div>
+  </div>
+
+  <div class="gallery-section" id="gallery-section" style="display:none">
+    <h3>Önizleme</h3>
+    <div class="grid" id="gallery"></div>
+  </div>
+
+  <div class="export-bar" id="export-bar" style="display:none">
+    <p id="export-info">Fotoğraflar hazır olduğunda indirebilirsiniz.</p>
+    <button class="export-btn" id="export-btn" disabled>⬇ Galeriyi İndir (HTML)</button>
+  </div>
+</div>
+
+<script type="module">
+let removeBackground = null;
+
+async function loadLib() {
+  try {
+    const mod = await import('https://esm.sh/@imgly/background-removal@1.4.5');
+    removeBackground = mod.removeBackground;
+  } catch(e) {
+    console.warn('BG removal lib failed to load:', e);
+  }
+}
+
+loadLib();
+
+const processed = [];
+let total = 0;
+let done = 0;
+
+const dropZone = document.getElementById('drop-zone');
+const fileInput = document.getElementById('file-input');
+
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('drag-over');
+  handleFiles([...e.dataTransfer.files]);
+});
+fileInput.addEventListener('change', e => handleFiles([...e.target.files]));
+
+async function handleFiles(files) {
+  const imgs = files.filter(f => f.type.startsWith('image/'));
+  if (!imgs.length) return;
+
+  total += imgs.length;
+  document.getElementById('progress-section').style.display = 'block';
+  document.getElementById('gallery-section').style.display = 'block';
+  document.getElementById('export-bar').style.display = 'flex';
+
+  for (const file of imgs) {
+    await processFile(file);
+  }
+}
+
+async function processFile(file) {
+  const list = document.getElementById('progress-list');
+  const id = 'p_' + Math.random().toString(36).slice(2);
+
+  const row = document.createElement('div');
+  row.className = 'progress-item';
+  row.id = id;
+  row.innerHTML = `<span class="fname">${file.name}</span><span class="status-badge status-proc">İşleniyor...</span>`;
+  list.appendChild(row);
+
+  let dataUrl;
+  try {
+    if (!removeBackground) throw new Error('lib not ready');
+    const blob = await removeBackground(file, {
+      publicPath: 'https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.4.5/dist/',
+      debug: false,
+    });
+    dataUrl = await toDataUrl(blob);
+    row.querySelector('.status-badge').className = 'status-badge status-done';
+    row.querySelector('.status-badge').textContent = '✓ Tamamlandı';
+  } catch(e) {
+    dataUrl = await toDataUrl(file);
+    row.querySelector('.status-badge').className = 'status-badge status-err';
+    row.querySelector('.status-badge').textContent = '⚠ Orijinal kullanıldı';
+  }
+
+  processed.push({ dataUrl });
+  done++;
+
+  addCard(dataUrl, processed.length);
+  updateExport();
+}
+
+function addCard(dataUrl, index) {
+  const wpUrl = document.getElementById('wp-url').value || '#';
+  const price = document.getElementById('price').value || '300';
+  const gallery = document.getElementById('gallery');
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.dataset.index = index - 1;
+  card.innerHTML = `
+    <div class="img-wrap"><img src="${dataUrl}" alt="Ürün ${index}" loading="lazy"></div>
+    <div class="card-footer">
+      <span class="price">${price} ₺</span>
+      <a href="${wpUrl}?urun=${index}" class="order-btn" target="_blank">Sipariş Ver</a>
+    </div>`;
+  gallery.appendChild(card);
+}
+
+function updateExport() {
+  const info = document.getElementById('export-info');
+  const btn = document.getElementById('export-btn');
+  info.textContent = `${done} / ${total} fotoğraf hazır`;
+  if (done > 0) {
+    btn.disabled = false;
+  }
+}
+
+function toDataUrl(input) {
+  return new Promise(resolve => {
+    const reader = new FileReader();
+    reader.onload = e => resolve(e.target.result);
+    if (input instanceof Blob) reader.readAsDataURL(input);
+    else reader.readAsDataURL(input);
+  });
+}
+
+document.getElementById('export-btn').addEventListener('click', () => {
+  const wpUrl = document.getElementById('wp-url').value || '#';
+  const price = document.getElementById('price').value || '300';
+
+  const cards = processed.map((img, i) => `
+    <div class="card">
+      <div class="img-wrap"><img src="${img.dataUrl}" alt="Ürün ${i+1}" loading="lazy"></div>
+      <div class="card-footer">
+        <span class="price">${price} ₺</span>
+        <a href="${wpUrl}?urun=${i+1}" class="btn" target="_blank">Sipariş Ver</a>
+      </div>
+    </div>`).join('');
+
+  const html = `<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Ürünler</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{background:#f5f5f5;font-family:'Segoe UI',sans-serif;padding:32px 16px}
+h1{text-align:center;margin-bottom:32px;font-size:2rem;color:#222}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:24px;max-width:1200px;margin:0 auto}
+.card{background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.08);transition:transform .2s,box-shadow .2s}
+.card:hover{transform:translateY(-4px);box-shadow:0 8px 24px rgba(0,0,0,.14)}
+.img-wrap{background:linear-gradient(135deg,#f0f0f0,#e8e8e8);display:flex;align-items:center;justify-content:center;padding:20px;height:220px}
+.img-wrap img{max-width:100%;max-height:180px;object-fit:contain;filter:drop-shadow(0 4px 8px rgba(0,0,0,.18))}
+.card-footer{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-top:1px solid #f0f0f0}
+.price{font-size:1.2rem;font-weight:700;color:#1a1a1a}
+.btn{background:#ff4b2b;color:#fff;text-decoration:none;padding:8px 18px;border-radius:8px;font-size:.9rem;font-weight:600;transition:background .15s}
+.btn:hover{background:#e03a1e}
+@media(max-width:480px){.grid{grid-template-columns:repeat(2,1fr);gap:12px}.img-wrap{height:160px}}
+</style>
+</head>
+<body>
+<h1>Ürünler</h1>
+<div class="grid">${cards}
+</div>
+</body>
+</html>`;
+
+  const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'galeri.html';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+});
+</script>
+</body>
+</html>
